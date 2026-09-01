@@ -144,6 +144,7 @@ class AuditAction(StrEnum):
     PR_SUBMIT = "PR_SUBMIT"
     PR_APPROVE = "PR_APPROVE"
     PR_REJECT = "PR_REJECT"
+    PR_REVISE = "PR_REVISE"  # Phase 7: REJECTED -> DRAFT 重新编辑
     PR_CANCEL = "PR_CANCEL"
     PO_CREATE = "PO_CREATE"
     PO_CONFIRM = "PO_CONFIRM"

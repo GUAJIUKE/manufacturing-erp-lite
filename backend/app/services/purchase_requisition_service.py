@@ -1,4 +1,4 @@
-"""Purchase requisition service (Phase 6).
+"""Purchase requisition service (Phase 6 + Phase 7 approval workflow).
 
 Business-document rules, NOT plain CRUD:
 
@@ -7,13 +7,20 @@ Business-document rules, NOT plain CRUD:
   current department — never derived from the user's current department
   afterwards (Phase 6 §二).
 * Status changes only via the central transition map below; the API layer
-  never writes ``status`` directly (Phase 6 §十二).
+  never writes ``status`` directly (Phase 6 §十二 / Phase 7 §一).
 * Money is always recomputed server-side through ``app.utils.money``
   (ROUND_HALF_UP, 2 decimals); client-sent amounts are ignored (Phase 6 §八).
-* Updates / submit / cancel use atomic conditional UPDATEs so concurrent
-  editors cannot overwrite each other (optimistic lock, Phase 6 §十一).
-* Object-level rule: a plain applicant only touches their own PRs; ADMIN
-  keeps management capability (Phase 6 §六 / §十四).
+* Updates / submit / cancel / approve / reject / revise use atomic
+  conditional UPDATEs so concurrent editors cannot overwrite each other
+  (optimistic lock, Phase 6 §十一 / Phase 7 §十四).
+* Object-level rules (Phase 6 §六 / §十四, Phase 7 §四):
+  - a plain applicant only touches their own PRs;
+  - a department manager may approve/reject PRs of departments they manage
+    (current ``department_managers`` relation, never hard-coded);
+  - ADMIN keeps management capability and may override as approver
+    (``is_admin_override`` — recorded in step_name + audit description).
+* Approval actions write an append-only ``approval_records`` row PLUS a
+  system ``operation_logs`` row in the SAME transaction (Phase 7 §三 / §十五).
 """
 
 from __future__ import annotations
@@ -21,7 +28,7 @@ from __future__ import annotations
 from datetime import date, datetime, timezone
 from decimal import Decimal
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import (
@@ -32,7 +39,15 @@ from app.core.exceptions import (
     PermissionDeniedException,
     ValidationException,
 )
-from app.models import Department, Material, PurchaseRequisition, PurchaseRequisitionItem, User
+from app.models import (
+    ApprovalRecord,
+    Department,
+    DepartmentManager,
+    Material,
+    PurchaseRequisition,
+    PurchaseRequisitionItem,
+    User,
+)
 from app.schemas.auth import CurrentUser
 from app.schemas.purchase_requisition import (
     PurchaseRequisitionCreate,
@@ -42,23 +57,31 @@ from app.services import audit_service, numbering_service
 from app.utils import money
 from app.utils.enums import (
     ActiveStatus,
+    ApprovalAction,
     AuditAction,
     DeptStatus,
+    DocumentType,
     PrStatus,
     RoleCode,
     SequenceKey,
+    UserStatus,
 )
 
 _MODULE = "pr"
 _DOCUMENT_TYPE = "PURCHASE_REQUISITION"
 
 # ----------------------------------------------------------------------
-# Status machine (Phase 6 §十二): the single source of truth.
-# Phase 6 only implements DRAFT -> PENDING (submit) and DRAFT -> CANCELLED
-# (cancel). APPROVED / REJECTED transitions arrive with Phase 7.
+# Status machine (Phase 6 §十二 / Phase 7 §二): the single source of truth.
+# Phase 7 adds: PENDING -> APPROVED / REJECTED (approve/reject),
+# REJECTED -> DRAFT (revise, then edit + resubmit DRAFT -> PENDING).
+# Forbidden transitions stay out of the map: DRAFT -> APPROVED/REJECTED,
+# PENDING -> DRAFT, APPROVED -> anything, CANCELLED -> anything,
+# REJECTED -> PENDING (must go through DRAFT first).
 # ----------------------------------------------------------------------
 _TRANSITIONS: dict[PrStatus, frozenset[PrStatus]] = {
     PrStatus.DRAFT: frozenset({PrStatus.PENDING, PrStatus.CANCELLED}),
+    PrStatus.PENDING: frozenset({PrStatus.APPROVED, PrStatus.REJECTED}),
+    PrStatus.REJECTED: frozenset({PrStatus.DRAFT}),
 }
 
 
@@ -104,6 +127,64 @@ def _assert_self_or_admin(pr: PurchaseRequisition, user: CurrentUser) -> None:
             "只能操作自己创建的采购申请",
             code=ErrorCode.PR_NOT_APPLICANT,
         )
+
+
+def _assert_approver(db: Session, pr: PurchaseRequisition, user: CurrentUser) -> bool:
+    """Phase 7 §四 / §五: 审批人对象级校验。
+
+    通过返回 ``is_admin_override``（True 表示 ADMIN 越权兜底，须在
+    approval_record.step_name 与 operation_logs.description 中体现）。
+
+    校验顺序：用户 ACTIVE → 申请部门 ACTIVE → ADMIN override →
+    当前部门主管关系（department_managers，可查询、不写死 user_id）。
+    """
+    db_user = db.get(User, user.id)
+    if db_user is None or db_user.status != UserStatus.ACTIVE:
+        raise PermissionDeniedException("账号已被禁用，无法审批", code=ErrorCode.USER_DISABLED)
+    dept = db.get(Department, pr.department_id)
+    if dept is None or dept.status != DeptStatus.ACTIVE:
+        raise ConflictException(
+            f"申请部门 {dept.dept_name if dept else ''} 已停用，无法审批",
+            code=ErrorCode.MASTER_DATA_DISABLED,
+        )
+    if user.role_code == RoleCode.ADMIN.value:
+        return True  # ADMIN override（审计中显式记录）
+    is_manager = db.execute(
+        select(DepartmentManager.id).where(
+            DepartmentManager.dept_id == pr.department_id,
+            DepartmentManager.user_id == user.id,
+        )
+    ).scalar_one_or_none()
+    if is_manager is None:
+        raise PermissionDeniedException(
+            "只有申请部门的主管才能审批该采购申请",
+            code=ErrorCode.PR_NOT_APPROVER,
+        )
+    return False
+
+
+def _assert_version(pr: PurchaseRequisition, version: int) -> None:
+    """乐观锁：客户端 version 必须等于当前 version（Phase 7 §十四）。"""
+    if pr.version != version:
+        raise ConflictException(
+            "单据已被其他操作修改，请刷新后重试",
+            code=ErrorCode.PR_VERSION_CONFLICT,
+        )
+
+
+def _raise_if_concurrent_change(db: Session, pr: PurchaseRequisition, expected: PrStatus) -> None:
+    """条件 UPDATE rowcount==0 后：用锁定读穿透 REPEATABLE READ 快照，
+    区分「状态已被并发动作改走」与「version 已过期」。"""
+    db.refresh(pr, with_for_update=True)  # 当前读，看到最新已提交数据
+    if pr.status != expected:
+        raise ConflictException(
+            "单据已被其他操作处理，请刷新后重试",
+            code=ErrorCode.PR_ALREADY_PROCESSED,
+        )
+    raise ConflictException(
+        "单据已被其他操作修改，请刷新后重试",
+        code=ErrorCode.PR_VERSION_CONFLICT,
+    )
 
 
 def _assert_user_department_active(db: Session, user: CurrentUser) -> Department:
@@ -269,13 +350,27 @@ def list_prs(
     apply_date_from: date | None = None,
     apply_date_to: date | None = None,
 ) -> tuple[list[PurchaseRequisition], int]:
-    """分页列表：申请人默认只看自己的；有 pr:view 的其他角色看全部
-    （部门主管的部门范围规则留给 Phase 7 审批阶段完善）。"""
+    """分页列表（Phase 7 §六 查询范围，不因拥有 pr:view 就全量放行）：
+
+    - APPLICANT：只看自己的 PR
+    - DEPT_MANAGER：自己创建的 PR + 自己负责部门（当前有效主管关系）的 PR
+    - ADMIN / BUYER：全部（采购执行角色跨部门，Phase 8 转 PO 需要）
+    """
     stmt = select(PurchaseRequisition)
     count_stmt = select(func.count()).select_from(PurchaseRequisition)
 
     if user.role_code == RoleCode.APPLICANT.value:
         cond = PurchaseRequisition.applicant_id == user.id
+        stmt = stmt.where(cond)
+        count_stmt = count_stmt.where(cond)
+    elif user.role_code == RoleCode.DEPT_MANAGER.value:
+        managed_dept_ids = db.execute(
+            select(DepartmentManager.dept_id).where(DepartmentManager.user_id == user.id)
+        ).scalars().all()
+        cond = or_(
+            PurchaseRequisition.applicant_id == user.id,
+            PurchaseRequisition.department_id.in_(managed_dept_ids),
+        )
         stmt = stmt.where(cond)
         count_stmt = count_stmt.where(cond)
     if pr_no:
@@ -519,3 +614,269 @@ def cancel_pr(
         request_id=request_id,
     )
     return pr
+
+
+# ----------------------------------------------------------------------
+# Approval workflow (Phase 7)
+# ----------------------------------------------------------------------
+def _approval_record(
+    db: Session,
+    *,
+    pr: PurchaseRequisition,
+    action: ApprovalAction,
+    from_status: PrStatus,
+    to_status: PrStatus,
+    approver_id: int,
+    is_admin_override: bool,
+    comment: str | None,
+) -> ApprovalRecord:
+    """写一条 append-only 审批记录（Phase 7 §三）。
+
+    ``step_name`` 区分「部门主管审批 / 管理员越权审批」，让 ADMIN_OVERRIDE
+    在审批历史中可追溯；``result_status`` 与 ``to_status`` 同步保持向后兼容。
+    """
+    record = ApprovalRecord(
+        document_type=DocumentType.PURCHASE_REQUISITION,
+        document_id=pr.id,
+        document_no=pr.pr_no,
+        step_no=1,
+        step_name="管理员越权审批" if is_admin_override else "部门主管审批",
+        approver_id=approver_id,
+        action=action,
+        from_status=from_status.value,
+        to_status=to_status.value,
+        result_status=to_status.value,
+        comment=comment,
+    )
+    db.add(record)
+    return record
+
+
+def approve_pr(
+    db: Session,
+    pr_id: int,
+    *,
+    version: int,
+    comment: str | None,
+    user: CurrentUser,
+    ip_address: str | None = None,
+    user_agent: str | None = None,
+    request_id: str | None = None,
+) -> PurchaseRequisition:
+    """审批通过 PENDING -> APPROVED（Phase 7 §七 / §八）。
+
+    Approve 必须重新校验业务数据：提交与审批之间物料可能已被停用，此时
+    不应批准一张后续无法转 PO 的 PR。全部校验通过后：原子条件更新 status/
+    version + 写 approval_record + 写 operation_log，单事务（Phase 7 §十五）。
+    """
+    pr = _load(db, pr_id)
+    _assert_transition(pr, PrStatus.APPROVED)  # 非 PENDING -> 4002
+    _assert_version(pr, version)  # 乐观锁 -> 4011
+    is_admin_override = _assert_approver(db, pr, user)  # 对象级 -> 403/4007
+
+    # 重新校验业务数据（不依赖 submit 时的历史校验，Phase 7 §八）
+    if not pr.items:
+        raise ConflictException(
+            "采购申请至少需要一条明细才能审批",
+            code=ErrorCode.PR_EMPTY_ITEMS,
+        )
+    for item in pr.items:
+        _assert_material_active(db, item.material_id)  # 物料存在且 ACTIVE -> 3009
+        if item.requested_quantity <= 0:
+            raise ValidationException(f"明细 {item.line_no} 申请数量必须大于 0")
+        if item.estimated_unit_price < 0:
+            raise ValidationException(f"明细 {item.line_no} 预估单价不能为负数")
+    _recompute(pr)  # 服务端重算金额（幂等，审批时再次确认一致）
+    db.flush()
+
+    old_version = pr.version
+    result = db.execute(
+        update(PurchaseRequisition)
+        .where(
+            PurchaseRequisition.id == pr_id,
+            PurchaseRequisition.version == version,
+            PurchaseRequisition.status == PrStatus.PENDING,
+        )
+        .values(
+            status=PrStatus.APPROVED,
+            total_estimated_amount=pr.total_estimated_amount,
+            updated_by=user.id,
+            version=PurchaseRequisition.version + 1,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    if result.rowcount == 0:
+        _raise_if_concurrent_change(db, pr, PrStatus.PENDING)
+    pr.status = PrStatus.APPROVED
+    pr.version = old_version + 1
+    db.flush()
+
+    _approval_record(
+        db,
+        pr=pr,
+        action=ApprovalAction.APPROVE,
+        from_status=PrStatus.PENDING,
+        to_status=PrStatus.APPROVED,
+        approver_id=user.id,
+        is_admin_override=is_admin_override,
+        comment=comment,
+    )
+    override_note = "（ADMIN 越权审批）" if is_admin_override else ""
+    audit_service.write_audit(
+        db,
+        action=AuditAction.PR_APPROVE,
+        module=_MODULE,
+        username_snapshot=user.username,
+        document_type=_DOCUMENT_TYPE,
+        document_id=pr.id,
+        document_no=pr.pr_no,
+        description=f"审批通过采购申请 {pr.pr_no}{override_note}（version {old_version} → {pr.version}）",
+        ip_address=ip_address,
+        user_agent=user_agent,
+        request_id=request_id,
+    )
+    return pr
+
+
+def reject_pr(
+    db: Session,
+    pr_id: int,
+    *,
+    version: int,
+    comment: str,
+    user: CurrentUser,
+    ip_address: str | None = None,
+    user_agent: str | None = None,
+    request_id: str | None = None,
+) -> PurchaseRequisition:
+    """驳回 PENDING -> REJECTED（Phase 7 §九）。
+
+    与 approve 不同：不强制校验 material ACTIVE / 金额有效性 —— 即使业务
+    数据有问题也应允许主管驳回。comment 必填（schema 层 trim 校验兜底）。
+    """
+    pr = _load(db, pr_id)
+    _assert_transition(pr, PrStatus.REJECTED)  # 非 PENDING -> 4002
+    _assert_version(pr, version)  # 乐观锁 -> 4011
+    is_admin_override = _assert_approver(db, pr, user)  # 对象级 -> 403/4007
+
+    old_version = pr.version
+    result = db.execute(
+        update(PurchaseRequisition)
+        .where(
+            PurchaseRequisition.id == pr_id,
+            PurchaseRequisition.version == version,
+            PurchaseRequisition.status == PrStatus.PENDING,
+        )
+        .values(
+            status=PrStatus.REJECTED,
+            updated_by=user.id,
+            version=PurchaseRequisition.version + 1,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    if result.rowcount == 0:
+        _raise_if_concurrent_change(db, pr, PrStatus.PENDING)
+    pr.status = PrStatus.REJECTED
+    pr.version = old_version + 1
+    db.flush()
+
+    _approval_record(
+        db,
+        pr=pr,
+        action=ApprovalAction.REJECT,
+        from_status=PrStatus.PENDING,
+        to_status=PrStatus.REJECTED,
+        approver_id=user.id,
+        is_admin_override=is_admin_override,
+        comment=comment,
+    )
+    override_note = "（ADMIN 越权审批）" if is_admin_override else ""
+    audit_service.write_audit(
+        db,
+        action=AuditAction.PR_REJECT,
+        module=_MODULE,
+        username_snapshot=user.username,
+        document_type=_DOCUMENT_TYPE,
+        document_id=pr.id,
+        document_no=pr.pr_no,
+        description=f"驳回采购申请 {pr.pr_no}{override_note}（version {old_version} → {pr.version}）",
+        ip_address=ip_address,
+        user_agent=user_agent,
+        request_id=request_id,
+    )
+    return pr
+
+
+def revise_pr(
+    db: Session,
+    pr_id: int,
+    *,
+    version: int,
+    user: CurrentUser,
+    ip_address: str | None = None,
+    user_agent: str | None = None,
+    request_id: str | None = None,
+) -> PurchaseRequisition:
+    """重新编辑 REJECTED -> DRAFT（Phase 7 §十）。
+
+    仅原申请人（或 ADMIN，沿用现有对象权限策略）。不修改业务内容，
+    清空 submitted_at（旧提交时间可从审计/审批历史追溯）。不写
+    approval_record —— revise 不是审批动作，只写 PR_REVISE 审计。
+    """
+    pr = _load(db, pr_id)
+    _assert_transition(pr, PrStatus.DRAFT)  # 非 REJECTED -> 4002
+    _assert_self_or_admin(pr, user)  # 仅 applicant（或 ADMIN）-> 403/4005
+    _assert_version(pr, version)  # 乐观锁 -> 4011
+
+    old_version = pr.version
+    result = db.execute(
+        update(PurchaseRequisition)
+        .where(
+            PurchaseRequisition.id == pr_id,
+            PurchaseRequisition.version == version,
+            PurchaseRequisition.status == PrStatus.REJECTED,
+        )
+        .values(
+            status=PrStatus.DRAFT,
+            submitted_at=None,  # 新编辑轮次，旧提交时间不再代表当前（Phase 7 §十.5）
+            updated_by=user.id,
+            version=PurchaseRequisition.version + 1,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    if result.rowcount == 0:
+        _raise_if_concurrent_change(db, pr, PrStatus.REJECTED)
+    pr.status = PrStatus.DRAFT
+    pr.submitted_at = None
+    pr.version = old_version + 1
+    db.flush()
+
+    audit_service.write_audit(
+        db,
+        action=AuditAction.PR_REVISE,
+        module=_MODULE,
+        username_snapshot=user.username,
+        document_type=_DOCUMENT_TYPE,
+        document_id=pr.id,
+        document_no=pr.pr_no,
+        description=f"重新编辑被驳回的采购申请 {pr.pr_no}（version {old_version} → {pr.version}）",
+        ip_address=ip_address,
+        user_agent=user_agent,
+        request_id=request_id,
+    )
+    return pr
+
+
+def list_approvals(db: Session, pr_id: int, *, user: CurrentUser) -> list[ApprovalRecord]:
+    """审批历史（Phase 7 §十二）：仅「能查看该 PR 的用户」可看，
+    复用 get_pr 的对象级规则，防止审批历史侧漏业务数据。"""
+    get_pr(db, pr_id, user=user)  # 权限门：无权查看 PR 则 403/404
+    stmt = (
+        select(ApprovalRecord)
+        .where(
+            ApprovalRecord.document_type == DocumentType.PURCHASE_REQUISITION,
+            ApprovalRecord.document_id == pr_id,
+        )
+        .order_by(ApprovalRecord.created_at.asc(), ApprovalRecord.id.asc())
+    )
+    return list(db.execute(stmt).scalars().all())

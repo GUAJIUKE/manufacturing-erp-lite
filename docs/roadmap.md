@@ -148,14 +148,25 @@
 
 **验收**：编号格式与并发唯一（8 线程×5=40 无重复）、停用物料拦截、金额 HALF_UP 精度、乐观锁 409、并发 submit 单成功、对象级 403、审计四类落库 → `pytest` 67/67 + 冒烟 21/21 → `feat: implement purchase requisition (PR business document)`
 
-### Phase 7 — 审批流程
+### Phase 7 — 审批流程 ✅ 已完成（2026-09-01）
 
-- `submit` / `approve` / `reject` / `cancel` 接口
-- 审批记录落库
-- 审批中心列表（待我审批）
-- 业务级校验：同部门主管
+- 状态机扩展（集中映射 `_TRANSITIONS`，API 层不直接写 status）：Phase 6 已有 `DRAFT→PENDING` / `DRAFT→CANCELLED`；Phase 7 新增 `PENDING→APPROVED`（approve）、`PENDING→REJECTED`（reject）、`REJECTED→DRAFT`（revise）。禁止 `DRAFT→APPROVED/REJECTED`、`PENDING→DRAFT`、`APPROVED→*`、`CANCELLED→*`、`REJECTED→PENDING`（必须经 revise 回 DRAFT 再 submit）
+- 审批记录 `approval_records`（Phase 2 已建表，Phase 7 补列）：新增 `document_no`（单据编号冗余）、`from_status` / `to_status`（动作前后状态），`result_status` 保留并同步 `to_status`；`action=APPROVE/REJECT`；`comment` 通过时可选、驳回时必填（trim 非空，≤1000）；append-only，无 update/delete API
+- 审批权限两层：第一层 RBAC（复用 `pr:approve`，新增 `pr:reject` 权限点，DEPT_MANAGER/ADMIN 持有）；第二层对象级——仅 `department_managers` 当前有效关系中该部门主管可审批（用户 ACTIVE、部门 ACTIVE 复查），跨部门主管 403 `PR_NOT_APPROVER`；ADMIN 允许越权兜底，但 `approval_record.step_name="管理员越权审批"` + 审计 description 显式记录（is_admin_override）
+- approve 校验链（13 项）：PR 存在 → status=PENDING → 用户 ACTIVE → 有 pr:approve → 是申请部门主管（或 ADMIN override）→ version 匹配 → 至少 1 条明细 → 物料存在且 ACTIVE（提交与审批间可能被停用，必须重校验）→ 数量>0 → 单价≥0 → 金额服务端重算一致 → 并发原子更新 → 单事务写 approval_record + `PR_APPROVE` 审计
+- reject 校验链：不强制校验物料/金额（业务数据有问题也应允许驳回），comment 必填；写 approval_record + `PR_REJECT` 审计
+- revise：仅原申请人（或 ADMIN）；`REJECTED→DRAFT`、清空 `submitted_at`（历史提交时间仍可从审计追溯）、version+1；只写 `PR_REVISE` 审计，不写 approval_record
+- 重新提交：不新增 resubmit 端点，submit 天然支持 `REJECTED→DRAFT→PENDING` 链路；每次提交更新 `submitted_at`、version+1、写新 `PR_SUBMIT` 审计
+- 审批历史 `GET /{id}/approvals`：按 created_at 升序返回 approver/action/comment/from_status/to_status/created_at；仅「能查看该 PR 的用户」可看（复用 get_pr 对象级规则，无 pr:view 或非申请人看他人 PR 均 403）
+- 查询范围扩展：APPLICANT 只看自己；DEPT_MANAGER 看自己创建 + 自己负责部门的 PR（审批中心数据源，`status=PENDING` 筛选）；ADMIN/BUYER 看全部（采购执行跨部门）；不因拥有 pr:view 就全量放行
+- 乐观锁 + 并发审批：approve/reject/revise 均原子条件更新 `WHERE id=? AND version=? AND status=?` + `synchronize_session=False`；rowcount==0 时锁定读（`with_for_update`）穿透 REPEATABLE READ 快照，区分 `PR_VERSION_CONFLICT`(4011) 与 `PR_ALREADY_PROCESSED`(4012)；并发 approve-vs-approve、approve-vs-reject 均恰好 1 个成功（8 线程实测）
+- 索引：新增 `ix_pr_dept_status (department_id, status)` 联合索引支撑审批中心高频查询；保留单列 `ix_pr_status`（"我的 PENDING"）、`ix_pr_dept`（独立部门筛选），组合索引左前缀不可替代单列场景
+- 审计：AuditAction 26→27（新增 `PR_REVISE`）；审批动作审计含 document_no / old-new status / version / ADMIN override 标记；approval_records 存业务审批意见，operation_logs 存系统操作审计，两概念分离
+- 迁移：`2026_09_01_1445-b7c4d9e1a3f6`（approval_records 三列 + `ix_pr_dept_status` + action ENUM 扩 27），dev+test `alembic check` 无 drift
+- 期间修复：冒烟脚本断言 submitted_at 清空值为 Python `None`（非 JSON `null`）；SUBMIT 动作只写审计不写 approval_record（历史长度断言修正）；被停用物料阻断后续场景需新建物料
+- 安全 Review（9 项）：无 role 名称直判授权（权限点+对象级双层）；无前端隐藏授权依赖（API 强制校验）；跨部门审批被 department_managers 拦截；applicant/department 为服务端字段不可伪造；审批历史无侧漏；ADMIN override 双处审计；inactive 用户/部门均被复查拦截；主管关系实时查询（历史审批人经 approver_id 保留）
 
-**验收**：非主管审批被拒、驳回必填意见、跨部门不可审批 → `feat: implement approval workflow`
+**验收**：部门主管 approve 成功、403 矩阵（跨部门主管/普通申请人/无权限）、提交后停用物料 approve 拦截（reject 放行）、金额重算、reject comment 必填、revise 清空 submitted_at + 可编辑可重提、审批历史顺序与权限、部门主管列表范围、乐观锁 4011、并发 approve/approve-vs-reject 单成功、approval_records 无写 API → `pytest` 103/103 + 冒烟 22/22 → `feat: implement purchase requisition approval workflow`
 
 ### Phase 8 — 采购订单
 

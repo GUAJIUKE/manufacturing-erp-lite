@@ -15,9 +15,9 @@ from __future__ import annotations
 from datetime import date, datetime
 from decimal import Decimal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.utils.enums import PrStatus
+from app.utils.enums import ApprovalAction, DocumentType, PrStatus
 
 
 class PurchaseRequisitionItemCreate(BaseModel):
@@ -103,3 +103,50 @@ class PurchaseRequisitionOut(BaseModel):
     created_at: datetime
     updated_at: datetime
     items: list[PurchaseRequisitionItemOut] = []
+
+
+# ----------------------------------------------------------------------
+# Phase 7: approval workflow
+# ----------------------------------------------------------------------
+class PurchaseRequisitionApproveIn(BaseModel):
+    """审批通过：version 必填（乐观锁），comment 可选。"""
+
+    version: int = Field(ge=1, description="当前版本号（并发控制）")
+    comment: str | None = Field(default=None, max_length=1000, description="审批意见（通过时可选）")
+
+
+class PurchaseRequisitionRejectIn(BaseModel):
+    """驳回：comment 必填，trim 后不能为空（Phase 7 §九 / §十六）。"""
+
+    version: int = Field(ge=1, description="当前版本号（并发控制）")
+    comment: str = Field(max_length=1000, description="驳回原因（必填）")
+
+    @field_validator("comment")
+    @classmethod
+    def _comment_not_blank(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("驳回原因不能为空")
+        return v
+
+
+class PurchaseRequisitionReviseIn(BaseModel):
+    """被驳回后重新编辑（REJECTED -> DRAFT）：仅 version 必填。"""
+
+    version: int = Field(ge=1, description="当前版本号（并发控制）")
+
+
+class ApprovalRecordOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    document_type: DocumentType
+    document_no: str | None = None
+    step_name: str | None = None
+    approver_id: int
+    approver_name: str | None = None
+    action: ApprovalAction
+    from_status: str | None = None
+    to_status: str | None = None
+    comment: str | None = None
+    created_at: datetime

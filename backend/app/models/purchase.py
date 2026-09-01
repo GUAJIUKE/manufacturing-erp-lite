@@ -40,6 +40,9 @@ class PurchaseRequisition(PKMixin, TimestampMixin, Base):
         Index("ix_pr_applicant", "applicant_id"),
         Index("ix_pr_dept", "department_id"),
         Index("ix_pr_date", "apply_date"),
+        # Phase 7 审批中心高频查询（department_id + status=PENDING）：联合索引
+        # 优于两个单列各自扫描 + index merge（Phase 7 §二十二）。
+        Index("ix_pr_dept_status", "department_id", "status"),
     )
 
     pr_no: Mapped[str] = mapped_column(String(32), nullable=False, comment="PR-20260901-0001")
@@ -303,6 +306,9 @@ class ApprovalRecord(PKMixin, Base):
         nullable=False,
     )
     document_id: Mapped[int] = mapped_column(BigInteger(unsigned=True), nullable=False, comment="单据 ID（非 FK）")
+    document_no: Mapped[str | None] = mapped_column(
+        String(32), nullable=True, comment="单据编号冗余（如 PR-20260901-0001），便于审计查询（Phase 7 §三）"
+    )
     step_no: Mapped[int] = mapped_column(
         SMALLINT(unsigned=True), nullable=False, server_default="1", comment="审批级别，v1 恒为 1"
     )
@@ -316,7 +322,13 @@ class ApprovalRecord(PKMixin, Base):
         SAEnum(ApprovalAction, values_callable=lambda e: [m.value for m in e]),
         nullable=False,
     )
-    result_status: Mapped[str] = mapped_column(String(32), nullable=False, comment="动作执行后单据状态快照")
+    from_status: Mapped[str | None] = mapped_column(
+        String(32), nullable=True, comment="审批动作前状态（Phase 7 §三）"
+    )
+    to_status: Mapped[str | None] = mapped_column(
+        String(32), nullable=True, comment="审批动作后状态（Phase 7 §三）"
+    )
+    result_status: Mapped[str] = mapped_column(String(32), nullable=False, comment="动作执行后单据状态快照（与 to_status 同步）")
     comment: Mapped[str | None] = mapped_column(String(1000), nullable=True, comment="审批意见，驳回时必填")
     created_at: Mapped[datetime] = mapped_column(
         DATETIME(fsp=3), nullable=False, server_default=func.current_timestamp(3)

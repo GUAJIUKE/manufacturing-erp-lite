@@ -100,6 +100,7 @@ PERMISSIONS: list[tuple[str, str, str]] = [
     ("pr:delete", "删除草稿申请", "pr"),
     ("pr:submit", "提交审批", "pr"),
     ("pr:approve", "审批申请", "pr"),
+    ("pr:reject", "驳回申请", "pr"),
     ("pr:cancel", "撤销申请", "pr"),
     # 采购订单
     ("po:view", "查看订单", "po"),
@@ -144,7 +145,8 @@ ROLE_PERMISSIONS: dict[RoleCode, set[str]] = {
         "dashboard:view",
     },
     RoleCode.DEPT_MANAGER: {
-        "pr:view", "pr:create", "pr:update", "pr:delete", "pr:submit", "pr:approve", "pr:cancel",
+        "pr:view", "pr:create", "pr:update", "pr:delete", "pr:submit",
+        "pr:approve", "pr:reject", "pr:cancel",
         "po:view", "receipt:view",
         "inventory:view", "inventory_txn:view",
         "material:view", "supplier:view", "warehouse:view",

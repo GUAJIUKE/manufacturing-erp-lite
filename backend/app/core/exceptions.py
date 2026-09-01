@@ -70,6 +70,9 @@ class ErrorCode(IntEnum):
     PR_CANCEL_HAS_ACTIVE_PO = 4008
     PR_ITEM_CONVERT_EXCEEDED = 4009
     PR_ITEM_NOT_FOUND = 4010
+    # Phase 7: approval workflow
+    PR_VERSION_CONFLICT = 4011  # 乐观锁：客户端 version 已过期
+    PR_ALREADY_PROCESSED = 4012  # 单据已被其他审批动作处理（并发/重复审批）
 
     # 5xxx purchase order
     PO_NOT_FOUND = 5001

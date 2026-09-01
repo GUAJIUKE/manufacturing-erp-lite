@@ -19,11 +19,15 @@ from sqlalchemy.orm import Session
 
 from app.api.v1.deps import CurrentUserDep, DbDep, require_perm
 from app.core.response import ApiResponse, PageResult
-from app.models import Department, PurchaseRequisition, User
+from app.models import ApprovalRecord, Department, PurchaseRequisition, User
 from app.schemas.purchase_requisition import (
+    ApprovalRecordOut,
+    PurchaseRequisitionApproveIn,
     PurchaseRequisitionCreate,
     PurchaseRequisitionItemOut,
     PurchaseRequisitionOut,
+    PurchaseRequisitionRejectIn,
+    PurchaseRequisitionReviseIn,
     PurchaseRequisitionUpdate,
 )
 from app.services import purchase_requisition_service as pr_service
@@ -181,3 +185,81 @@ def cancel_pr(
     pr = pr_service.cancel_pr(db, pr_id, **_audit_ctx(request, user))
     db.commit()
     return ApiResponse.ok(_to_out(db, pr), message="已取消")
+
+
+# ----------------------------------------------------------------------
+# Phase 7: approval workflow
+# ----------------------------------------------------------------------
+@router.post("/{pr_id}/approve", summary="审批通过（PENDING → APPROVED）")
+def approve_pr(
+    pr_id: int,
+    payload: PurchaseRequisitionApproveIn,
+    request: Request,
+    db: DbDep,
+    user: CurrentUserDep,
+    _guard: None = Depends(require_perm("pr:approve")),
+) -> ApiResponse[PurchaseRequisitionOut]:
+    pr = pr_service.approve_pr(
+        db, pr_id, version=payload.version, comment=payload.comment, **_audit_ctx(request, user)
+    )
+    db.commit()
+    return ApiResponse.ok(_to_out(db, pr), message="审批通过")
+
+
+@router.post("/{pr_id}/reject", summary="驳回（PENDING → REJECTED，comment 必填）")
+def reject_pr(
+    pr_id: int,
+    payload: PurchaseRequisitionRejectIn,
+    request: Request,
+    db: DbDep,
+    user: CurrentUserDep,
+    _guard: None = Depends(require_perm("pr:reject")),
+) -> ApiResponse[PurchaseRequisitionOut]:
+    pr = pr_service.reject_pr(
+        db, pr_id, version=payload.version, comment=payload.comment, **_audit_ctx(request, user)
+    )
+    db.commit()
+    return ApiResponse.ok(_to_out(db, pr), message="已驳回")
+
+
+@router.post("/{pr_id}/revise", summary="重新编辑被驳回的申请（REJECTED → DRAFT）")
+def revise_pr(
+    pr_id: int,
+    payload: PurchaseRequisitionReviseIn,
+    request: Request,
+    db: DbDep,
+    user: CurrentUserDep,
+    _guard: None = Depends(require_perm("pr:update")),
+) -> ApiResponse[PurchaseRequisitionOut]:
+    pr = pr_service.revise_pr(db, pr_id, version=payload.version, **_audit_ctx(request, user))
+    db.commit()
+    return ApiResponse.ok(_to_out(db, pr), message="已重新编辑")
+
+
+@router.get("/{pr_id}/approvals", summary="审批历史（按时间升序）")
+def list_approvals(
+    pr_id: int,
+    db: DbDep,
+    user: CurrentUserDep,
+    _guard: None = Depends(require_perm("pr:view")),
+) -> ApiResponse[list[ApprovalRecordOut]]:
+    records = pr_service.list_approvals(db, pr_id, user=user)
+    out: list[ApprovalRecordOut] = []
+    for rec in records:
+        approver = db.get(User, rec.approver_id)
+        out.append(
+            ApprovalRecordOut(
+                id=rec.id,
+                document_type=rec.document_type,
+                document_no=rec.document_no,
+                step_name=rec.step_name,
+                approver_id=rec.approver_id,
+                approver_name=(approver.real_name or approver.username) if approver else None,
+                action=rec.action,
+                from_status=rec.from_status,
+                to_status=rec.to_status,
+                comment=rec.comment,
+                created_at=rec.created_at,
+            )
+        )
+    return ApiResponse.ok(out)
