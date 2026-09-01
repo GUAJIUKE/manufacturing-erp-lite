@@ -1055,17 +1055,29 @@ production_receipts          生产完工单
 
 ---
 
-## 13. 待确认 / 需 Review 关注点
+## 13. Review 结论（已确认，2026-09-01）
 
-| # | 关注点 | 我的处理 | 需你确认 |
+Phase 2 Review 通过，6 个开放点**全部采纳推荐方案**，据此进入 Phase 3。
+
+| # | 关注点 | 最终决策 | 影响 |
 |---|---|---|---|
-| A-1 | `reversal_transaction_id` 字段被移除（因 append-only 无法回填） | 仅保留 `reversed_transaction_id`，反向查询用 `WHERE reversed_transaction_id = :id` | 是否可接受单向指针？ |
-| A-2 | `PO item.ordered_quantity > SUM(sources.quantity)` 允许（MOQ 超采） | Service 校验 `<=`，差额需填 `remark` | 是否强制相等？ |
-| A-3 | 冲销**不回退** PR `converted_quantity`（R-05） | 冲销是仓库端纠错，采购关系仍成立 | 是否应回退以支持重新转单？ |
-| A-4 | `unit_price` DB CHECK 为 `>= 0`，Service 在 confirm 时校验 `> 0` | 允许 DRAFT 暂存 0 | 是否改为 DB 层直接 `> 0`？ |
-| A-5 | Docker daemon 未启动，Phase 3 可能走本地 MySQL 方案 | 见 §0 方案 A / B | 是否需要我尝试启动 Docker Desktop？ |
-| A-6 | 冲销为**整单冲销**，不支持部分冲销 | 第一阶段简化 | 是否需要部分冲销？ |
+| A-1 | 冲销指针方向 | ✅ **采纳单向指针**。仅保留 `reversed_transaction_id`，反向查询用 `WHERE reversed_transaction_id = :id` | 保持 append-only 纯粹性，反向查询多一次索引扫描，可接受 |
+| A-2 | PO 超采差额 | ✅ **采纳允许差额**。`ordered_quantity >= SUM(sources.quantity)`，差额需在 `po_item.remark` 说明 | 支持 MOQ / 包装倍数场景；对账脚本需能识别差额 |
+| A-3 | 冲销是否回退 PR | ✅ **采纳不回退**。冲销是仓库端纠错，PR→PO 的采购关系依然成立 | 需重新采购时新建 PO，而非回退 PR。UI 需明确提示 |
+| A-4 | `unit_price` 严格度 | ✅ **采纳 DB `>= 0` + confirm 时校验 `> 0`** | 允许草稿暂存 0，确认下单强制有价 |
+| A-5 | 运行环境 | ✅ **采纳本地 MySQL 方案**（Docker daemon 不可用）。Python 3.12.9 + MySQL 8 ZIP 免安装版 | `docker-compose.yml` 仍按方案 A 交付，Docker 恢复后可直接切换 |
+| A-6 | 部分冲销 | ✅ **采纳整单冲销**。第一阶段不支持部分冲销 | 部分冲销需拆单处理，留待需求明确 |
+
+**同时确认的实现约束**（来自 Data Integrity Review，Phase 3/9 强制落实）：
+
+| 编号 | 约束 |
+|---|---|
+| C-01/C-02 | 入库必须用条件更新 + `rowcount == 1` 校验，禁止「先 SELECT 判断再 UPDATE」 |
+| R-01 | 冲销前先查是否已存在 `PURCHASE_IN_REVERSAL` 流水 |
+| S-01 | Pydantic Create / Update Schema 中严禁出现 `status` 字段 |
+| O-01 | 入库单、已提交 PR、库存流水禁止物理删除 |
+| M-01 | 全链路 `DECIMAL(18,4)`，Python 侧 `Decimal`，禁止 float |
 
 ---
 
-*文档结束。Review 通过后进入 Phase 3（后端基础架构）。*
+*Phase 2 结束。Phase 3：后端基础架构（FastAPI 分层 + Alembic + 首个迁移 + pytest 骨架）。*

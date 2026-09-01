@@ -2,7 +2,7 @@
 
 **制造企业采购库存协同系统** — 面向小型研发制造企业的轻量级 ERP 系统。
 
-> 当前阶段：**Phase 2 数据库设计已完成**，等待 Review 确认（Phase 3 未开始）。
+> 当前阶段：**Phase 3 后端基础架构已完成**（FastAPI 分层骨架 + 22 表迁移 + 统一响应/异常体系 + 冒烟测试通过）。
 
 ---
 
@@ -46,7 +46,7 @@ docker-compose.yml      容器编排
 | [docs/database-design.md](docs/database-design.md) | 数据库设计：22 张表、字段、约束、索引、枚举、Q1–Q16 落地对照 |
 | [docs/ERD.md](docs/ERD.md) | ER 图：全局 / 采购库存链路 / RBAC，附单据状态机 |
 | [docs/data-integrity-review.md](docs/data-integrity-review.md) | 数据一致性评审：11 维度 75 项检查点 |
-| docs/architecture.md | 系统架构（Phase 3） |
+| [docs/architecture.md](docs/architecture.md) | 系统架构：分层职责、事务边界、并发控制、编号方案 |
 | docs/business-flow.md | 业务流程图（Phase 10） |
 | docs/api-design.md | 接口设计（Phase 6） |
 | docs/deployment.md | 部署文档（Phase 13） |
@@ -60,8 +60,9 @@ docker-compose.yml      容器编排
 | Phase | 名称 | 状态 |
 |---|---|---|
 | 0–1 | 项目规划与需求文档 | ✅ 完成 |
-| 2 | 数据库设计 + Data Integrity Review | ✅ 完成（待 Review） |
-| 3–9 | 后端业务实现 | ⬜ 未开始 |
+| 2 | 数据库设计 + Data Integrity Review | ✅ 完成 |
+| 3 | 后端基础架构（骨架 + 迁移 + 测试） | ✅ 完成 |
+| 4–9 | 后端业务实现（登录/RBAC → 入库库存） | ⬜ 未开始 |
 | 10–11 | 前端与 Dashboard | ⬜ 未开始 |
 | 12–14 | 测试、部署、文档 | ⬜ 未开始 |
 

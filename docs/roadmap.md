@@ -12,7 +12,7 @@
 | 0 | 项目规划 | 仓库初始化、目录骨架、技术选型确认 | — | — | ✅ 完成 |
 | 1 | 需求文档 | `docs/requirements.md`、roadmap、模块划分、业务流程、待确认清单 | 0 | — | ✅ 完成 |
 | 2 | 数据库设计 | `docs/database-design.md`、`docs/ERD.md`、`docs/data-integrity-review.md` | 1 | 中 | ✅ 完成（待 Review） |
-| 3 | 后端基础架构 | FastAPI 分层骨架、配置、统一响应、异常处理、Alembic、Docker Compose | 2 | 中 | ⬜ |
+| 3 | 后端基础架构 | FastAPI 分层骨架、配置、统一响应、异常处理、Alembic、22 表迁移 | 2 | 中 | ✅ 完成 |
 | 4 | 登录与 RBAC | JWT 认证、权限守卫、用户/角色/部门 CRUD | 3 | 中 | ⬜ |
 | 5 | 主数据 | 物料、供应商、仓库 CRUD + 编码生成 | 4 | 小 | ⬜ |
 | 6 | 采购申请 | PR 单头明细 CRUD、状态机、编号生成 | 5 | 中 | ⬜ |
@@ -89,18 +89,22 @@
 
 **验收**：Data Integrity Review 通过 → 提交 `docs: add database design, ERD and integrity review`
 
-### Phase 3 — 后端基础架构
+### Phase 3 — 后端基础架构 ✅ 已完成（2026-09-01）
 
-- FastAPI 应用工厂、`/api/v1/` 路由聚合
-- `core/config.py`（Pydantic Settings，环境变量驱动）
-- 统一响应封装 `ApiResponse[T]`
-- 全局异常处理器（业务异常 / 校验异常 / 认证异常 / 未捕获）
-- SQLAlchemy 2.0 Session 工厂、`Base`、事务上下文管理器
-- Alembic 初始化 + 首个迁移
-- `docker-compose.yml`（MySQL 8 + backend）
-- `pytest` 骨架 + conftest（测试库、fixture 隔离）
+- FastAPI 应用工厂、`/api/v1/` 路由聚合（health check）
+- `core/config.py`（Pydantic Settings，环境变量驱动，Q14 防误连测试库）
+- 统一响应封装 `ApiResponse[T]` / `PageResult[T]`
+- 全局异常处理器（业务异常 / 校验异常 / 认证异常 / IntegrityError / 未捕获）
+- SQLAlchemy 2.0 Session 工厂、`Base`（命名约定）、事务上下文管理器
+- 22 张表 ORM 模型 + Alembic 初始迁移（含 append-only 触发器）
+- `pytest` 骨架 + conftest（独立测试库 `erp_lite_test`，fixture 隔离）
 
-**验收**：`pytest` 通过冒烟测试（health check + 建表/回滚）→ `chore: setup backend architecture`
+**验收记录**：
+- ✅ `pytest` 3/3 通过（health / 统一 404 / OpenAPI schema）
+- ✅ `/api/v1/health` 返回统一信封，数据库连通
+- ✅ 开发库与测试库迁移均为 23 表（22 业务表 + alembic_version）
+- ✅ 触发器 `trg_it_no_update` / `trg_it_no_delete` 生效
+- ⏳ `docker-compose.yml` 延后至 Phase 13（Docker daemon 不可用，开发用本机 MySQL）
 
 ### Phase 4 — 登录与 RBAC
 
