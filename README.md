@@ -2,7 +2,7 @@
 
 **制造企业采购库存协同系统** — 面向小型研发制造企业的轻量级 ERP 系统。
 
-> 当前阶段：**Phase 1 需求文档已完成**，等待数据库设计方向确认（Phase 2 未开始）。
+> 当前阶段：**Phase 2 数据库设计已完成**，等待 Review 确认（Phase 3 未开始）。
 
 ---
 
@@ -41,10 +41,11 @@ docker-compose.yml      容器编排
 
 | 文档 | 说明 |
 |---|---|
-| [docs/requirements.md](docs/requirements.md) | 需求规格：模块划分、业务流程、状态机、业务规则、待确认问题 |
-| [docs/roadmap.md](docs/roadmap.md) | Phase 0–14 路线图与验收标准 |
-| docs/database-design.md | 数据库设计（Phase 2） |
-| docs/ERD.md | ER 图（Phase 2） |
+| [docs/requirements.md](docs/requirements.md) | 需求规格：模块划分、业务流程、状态机、业务规则 R1–R15 |
+| [docs/roadmap.md](docs/roadmap.md) | Phase 0–14 路线图、验收标准、Q1–Q16 决策落地 |
+| [docs/database-design.md](docs/database-design.md) | 数据库设计：22 张表、字段、约束、索引、枚举、Q1–Q16 落地对照 |
+| [docs/ERD.md](docs/ERD.md) | ER 图：全局 / 采购库存链路 / RBAC，附单据状态机 |
+| [docs/data-integrity-review.md](docs/data-integrity-review.md) | 数据一致性评审：11 维度 75 项检查点 |
 | docs/architecture.md | 系统架构（Phase 3） |
 | docs/business-flow.md | 业务流程图（Phase 10） |
 | docs/api-design.md | 接口设计（Phase 6） |
@@ -59,7 +60,20 @@ docker-compose.yml      容器编排
 | Phase | 名称 | 状态 |
 |---|---|---|
 | 0–1 | 项目规划与需求文档 | ✅ 完成 |
-| 2 | 数据库设计 | ⏸ 待确认需求问题 |
+| 2 | 数据库设计 + Data Integrity Review | ✅ 完成（待 Review） |
 | 3–9 | 后端业务实现 | ⬜ 未开始 |
 | 10–11 | 前端与 Dashboard | ⬜ 未开始 |
 | 12–14 | 测试、部署、文档 | ⬜ 未开始 |
+
+## 设计要点
+
+| 维度 | 决策 |
+|---|---|
+| 表数量 | 22 张（主数据 10 / 采购 5 / 仓储 4 / 支撑 3） |
+| 安全库存 | 独立 `inventory_policies`，维度为 **warehouse + material** |
+| 审批人认定 | 独立 `department_managers` 表，不写死 user_id，避免循环外键 |
+| PR→PO 映射 | `purchase_order_item_sources` 明细级映射表，支持拆单与合单 |
+| 库存流水 | 带符号 `quantity`，`SUM(quantity)` 可一键对账；append-only 由触发器强制 |
+| 冲销 | 独立 `PURCHASE_IN_REVERSAL` 类型，不用 `ADJUST_OUT` 代替 |
+| 并发防超收 | 条件更新 + `rowcount` 校验，禁止「先 SELECT 再 UPDATE」 |
+| 编号生成 | `ON DUPLICATE KEY UPDATE + LAST_INSERT_ID()`，独立短事务，允许跳号 |

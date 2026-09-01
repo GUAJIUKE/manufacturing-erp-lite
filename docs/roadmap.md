@@ -11,7 +11,7 @@
 |---|---|---|---|---|---|
 | 0 | 项目规划 | 仓库初始化、目录骨架、技术选型确认 | — | — | ✅ 完成 |
 | 1 | 需求文档 | `docs/requirements.md`、roadmap、模块划分、业务流程、待确认清单 | 0 | — | ✅ 完成 |
-| 2 | 数据库设计 | `docs/database-design.md`、`docs/ERD.md`（Mermaid） | 1 | 中 | ⏸ 待确认 Q1–Q16 |
+| 2 | 数据库设计 | `docs/database-design.md`、`docs/ERD.md`、`docs/data-integrity-review.md` | 1 | 中 | ✅ 完成（待 Review） |
 | 3 | 后端基础架构 | FastAPI 分层骨架、配置、统一响应、异常处理、Alembic、Docker Compose | 2 | 中 | ⬜ |
 | 4 | 登录与 RBAC | JWT 认证、权限守卫、用户/角色/部门 CRUD | 3 | 中 | ⬜ |
 | 5 | 主数据 | 物料、供应商、仓库 CRUD + 编码生成 | 4 | 小 | ⬜ |
@@ -45,45 +45,49 @@
 - [x] 15 条强制业务规则（R1–R15）
 - [x] 16 项待确认业务问题（Q1–Q16）
 
-### Phase 2 — 数据库设计（下一步）
+### Phase 2 — 数据库设计 ✅
 
-**输入**：Q1–Q16 的确认结果
+**输入**：Q1–Q16 最终决策
 **产出**：
-- `docs/database-design.md` — 全部表、字段、类型、主键、外键、唯一约束、索引、状态枚举、表关系说明
-- `docs/ERD.md` — Mermaid ER Diagram（全图 + 采购域局部图）
+- `docs/database-design.md` — 22 张表的完整字段定义、MySQL 类型、PK/FK/UNIQUE/INDEX/CHECK、枚举、Q1–Q16 决策落地对照
+- `docs/ERD.md` — Mermaid 图：全局 ERD / PR→PO→Receipt→Inventory 局部 ERD / 用户部门 RBAC ERD / 附录状态机
+- `docs/data-integrity-review.md` — 11 个维度 75 项检查点的数据一致性评审
 
-**计划表清单（15 张）**：
+**最终表清单（22 张，较计划增加 3 张）**：
 
 ```
-主数据域
-  departments       部门
-  roles             角色
-  permissions       权限点
-  role_permissions  角色-权限关联
-  users             用户
-  materials         物料
-  suppliers         供应商
-  warehouses        仓库
+主数据域（10）
+  departments              部门
+  department_managers      部门主管关系   ★ 新增（Q12，避免循环外键）
+  roles / permissions / role_permissions  RBAC
+  users                    用户
+  materials                物料（不含 safety_stock）
+  suppliers                供应商
+  warehouses               仓库
+  inventory_policies       库存策略       ★ 新增（Q10，安全库存按 warehouse+material）
 
-采购域
-  purchase_requisitions      采购申请单头
-  purchase_requisition_items 采购申请明细
-  purchase_orders            采购订单单头
-  purchase_order_items       采购订单明细
+采购域（5）
+  purchase_requisitions / purchase_requisition_items
+  purchase_orders / purchase_order_items
+  purchase_order_item_sources            ★ 新增（Q4，PO-PR 明细映射）
 
-仓储域
-  purchase_receipts          采购入库单头
-  purchase_receipt_items     采购入库明细
-  inventory_balances         库存余额
-  inventory_transactions     库存流水
+仓储域（4）
+  purchase_receipts / purchase_receipt_items
+  inventory_balances / inventory_transactions
 
-支撑域
-  approval_records           审批记录
-  doc_sequences              单据编号序列
-  operation_logs             操作审计日志
+支撑域（3）
+  approval_records / number_sequences / operation_logs
 ```
 
-**验收**：表结构评审通过 → 提交 `docs: add database design and ERD`
+**关键设计决策**：
+- 安全库存独立成 `inventory_policies`，不放 `materials`（Q10）
+- 部门主管独立成 `department_managers`，不放 `departments.manager_user_id`（Q12）
+- PO-PR 用映射表 `purchase_order_item_sources` 而非 `po_item.source_pr_id`（Q4）
+- 库存流水 `quantity` 带符号，`SUM(quantity)` 可一键对账
+- 流水 append-only 用数据库触发器强制；`reversal_transaction_id` 因无法回填而移除
+- 编号用 `ON DUPLICATE KEY UPDATE + LAST_INSERT_ID()`，取号独立短事务，允许跳号
+
+**验收**：Data Integrity Review 通过 → 提交 `docs: add database design, ERD and integrity review`
 
 ### Phase 3 — 后端基础架构
 
@@ -233,17 +237,44 @@ chore:    构建/配置/依赖
 
 ## 四、当前阻塞项
 
-**Phase 2 前置条件**：`docs/requirements.md` §7 的 Q1–Q16 需确认。
+**Phase 3 前置条件**：Phase 2 输出需通过 Review。
 
-其中**影响表结构、必须确认**的关键 6 项：
+### 4.1 Q1–Q16 决策已全部落地 ✅
 
-| 关键项 | 影响的表 |
+| 决策 | 落地位置 |
 |---|---|
-| Q3 一 PR 多 PO（拆单） | `purchase_requisition_items.converted_quantity` |
-| Q4 一 PO 多 PR（合并） | `purchase_order_items.source_pr_id / source_pr_item_id` |
-| Q6 入库冲销 | `inventory_transactions` 反向流水、`purchase_receipts.status` |
-| Q7 移动加权平均计价 | `inventory_balances.total_amount / avg_price` |
-| Q11/Q15 多级审批 + 审计日志 | `approval_records`、`operation_logs` |
-| Q13 Docker / Python 3.12 环境 | 部署方式、依赖版本锁定 |
+| Q1 `REJECTED → DRAFT → PENDING` | PR 状态机白名单 |
+| Q2 APPROVED PR 无有效 PO 时可取消 | Service 校验（非 DB 约束） |
+| Q3 一 PR 拆多 PO | `pr_items.requested_quantity` + `converted_quantity` + CHECK |
+| Q4 一 PO 合并多 PR | `purchase_order_item_sources` 映射表 |
+| Q5 禁止超收 | CHECK + CAS 条件更新 |
+| Q6 冲销 | `PURCHASE_IN_REVERSAL` 枚举 + `reversed_transaction_id` + append-only 触发器 |
+| Q7 移动加权平均 | `inventory_balances(quantity, total_amount, average_unit_cost)` |
+| Q8 禁止负库存 | CHECK `quantity >= 0` |
+| Q9 PR 价可 0 / PO 价 > 0 | DB CHECK `>= 0` + Service confirm 时校验 `> 0` |
+| Q10 安全库存按 warehouse+material | `inventory_policies` 独立表 |
+| Q11 单级审批，预留多级 | `approval_records.step_no` |
+| Q12 审批人由部门+主管关系决定 | `department_managers` 表 |
+| Q13 Python 3.12 + MySQL 8 | 已确认 Python 3.12.9；Docker daemon 待启动 |
+| Q14 独立测试数据库 | `erp_lite` / `erp_lite_test` 双库 |
+| Q15 9 类关键业务审计 | `operation_logs` + `AuditAction` 枚举 |
+| Q16 不实现附件 | 不建表，扩展方案写入文档 §11 |
 
-其余为非阻塞项，可沿用推荐方案。
+### 4.2 待 Review 确认的 6 个开放点
+
+记录在 [`database-design.md` §13](./database-design.md#13-待确认--需-review-关注点)：
+
+| # | 关注点 | 我的处理 |
+|---|---|---|
+| A-1 | `reversal_transaction_id` 移除，仅保留单向指针 | 反向查询用 `WHERE reversed_transaction_id = :id` |
+| A-2 | `po_item.ordered_quantity` 允许 > 来源数量之和（MOQ 超采） | Service 校验 `<=`，差额需填 `remark` |
+| A-3 | 冲销不回退 PR `converted_quantity` | 冲销是仓库端纠错，采购关系仍成立 |
+| A-4 | `unit_price` DB CHECK `>= 0`，confirm 时校验 `> 0` | 允许 DRAFT 暂存 0 |
+| A-5 | Docker daemon 未启动 | 已给出本地 MySQL 备选方案 |
+| A-6 | 冲销为整单冲销，不支持部分冲销 | 第一阶段简化 |
+
+### 4.3 环境待办
+
+- [ ] 启动 Docker Desktop，验证 `docker info` 可用
+- [ ] 若 Docker 不可用，按 `database-design.md` §0 方案 B 部署本地 MySQL 8
+- [ ] 确认 Python 3.12.9（`E:\Python312\python.exe`）作为虚拟环境基线

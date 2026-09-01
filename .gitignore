@@ -53,3 +53,6 @@ Thumbs.db
 # Logs
 logs/
 *.log
+
+# WorkBuddy workspace data (not a deliverable)
+.workbuddy/
