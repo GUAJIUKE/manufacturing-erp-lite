@@ -10,10 +10,16 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.api.v1 import auth, departments, roles, users
 from app.core.response import ApiResponse
 from app.db.session import get_db
 
 api_router = APIRouter()
+api_router.include_router(auth.router)
+api_router.include_router(users.router)
+api_router.include_router(roles.router)
+api_router.include_router(roles.permission_router)
+api_router.include_router(departments.router)
 
 
 @api_router.get("/health", tags=["system"], summary="服务健康检查")

@@ -190,7 +190,7 @@ class PurchaseOrder(PKMixin, TimestampMixin, Base):
         passive_deletes=True,
     )
     supplier: Mapped["Supplier"] = relationship()
-    buyer: Mapped["User"] = relationship()
+    buyer: Mapped["User"] = relationship(foreign_keys="PurchaseOrder.buyer_id")
 
 
 class PurchaseOrderItem(PKMixin, TimestampMixin, Base):

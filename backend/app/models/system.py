@@ -191,8 +191,10 @@ class User(PKMixin, TimestampMixin, Base):
         nullable=True,
     )
 
-    department: Mapped["Department | None"] = relationship()
-    role: Mapped["Role"] = relationship()
+    department: Mapped["Department | None"] = relationship(
+        foreign_keys="User.department_id"
+    )
+    role: Mapped["Role"] = relationship(foreign_keys="User.role_id")
 
 
 class DepartmentManager(PKMixin, Base):

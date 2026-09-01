@@ -13,7 +13,7 @@
 | 1 | 需求文档 | `docs/requirements.md`、roadmap、模块划分、业务流程、待确认清单 | 0 | — | ✅ 完成 |
 | 2 | 数据库设计 | `docs/database-design.md`、`docs/ERD.md`、`docs/data-integrity-review.md` | 1 | 中 | ✅ 完成（待 Review） |
 | 3 | 后端基础架构 | FastAPI 分层骨架、配置、统一响应、异常处理、Alembic、22 表迁移 | 2 | 中 | ✅ 完成 |
-| 4 | 登录与 RBAC | JWT 认证、权限守卫、用户/角色/部门 CRUD | 3 | 中 | ⬜ |
+| 4 | 登录与 RBAC | JWT 认证、权限守卫、用户/角色/部门 CRUD | 3 | 中 | ✅ 完成 |
 | 5 | 主数据 | 物料、供应商、仓库 CRUD + 编码生成 | 4 | 小 | ⬜ |
 | 6 | 采购申请 | PR 单头明细 CRUD、状态机、编号生成 | 5 | 中 | ⬜ |
 | 7 | 审批流程 | 提交/批准/驳回、审批中心、审批记录 | 6 | 中 | ⬜ |
@@ -106,14 +106,17 @@
 - ✅ 触发器 `trg_it_no_update` / `trg_it_no_delete` 生效
 - ⏳ `docker-compose.yml` 延后至 Phase 13（Docker daemon 不可用，开发用本机 MySQL）
 
-### Phase 4 — 登录与 RBAC
+### Phase 4 — 登录与 RBAC ✅ 已完成（2026-09-01）
 
-- `POST /api/v1/auth/login` → JWT
-- `get_current_user` 依赖、`require_perm("po:confirm")` 权限守卫
-- 用户 CRUD（密码 bcrypt 哈希）、角色 CRUD（权限分配）、部门 CRUD
-- 审计日志记录登录
+- `POST /api/v1/auth/login` → JWT（HS256，`sub`=username，`uid`/`role` 入 payload）
+- `get_current_user` 依赖、`require_perm("po:confirm")` 权限守卫（401 / 403 统一信封）
+- 用户 CRUD（密码 bcrypt 哈希、用户名唯一、软删除停用）
+- 角色 CRUD（替换式权限分配 `POST /roles/{id}/permissions` → `PERMISSION_CHANGE` 审计）
+- 部门 CRUD（软删除停用，有用户引用时拒绝）
+- 审计日志：登录成功 `LOGIN`、失败 `LOGIN_FAILED`（独立事务，无会话也能落库）
+- 初始化脚本 `python -m app.db.init_data`：6 部门 / 5 角色 / 44 权限点 / 角色-权限矩阵 / 5 个演示账号 / 部门主管关系（幂等，dev + test 双库可跑）
 
-**验收**：登录、无 token 401、无权限 403、密码哈希不可逆 → `feat: implement auth and RBAC`
+**验收**：登录、无 token 401、无权限 403、密码哈希不可逆、停用账号 403 → `pytest` 23/23 通过 → `feat: implement auth and RBAC`
 
 ### Phase 5 — 主数据
 

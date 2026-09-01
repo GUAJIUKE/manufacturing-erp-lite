@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Any, Generic, TypeVar
 
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 from app.core.exceptions import ErrorCode
 
@@ -44,16 +44,17 @@ class ApiResponse(BaseModel, Generic[T]):
 class PageResult(BaseModel, Generic[T]):
     """Standard pagination envelope::
 
-        {"items": [...], "total": 42, "page": 1, "page_size": 20}
+        {"items": [...], "total": 42, "page": 1, "page_size": 20, "total_pages": 3}
     """
 
     items: list[T]
     total: int
     page: int
     page_size: int
+    total_pages: int = 0
 
-    @property
-    def total_pages(self) -> int:
-        if self.page_size <= 0:
-            return 0
-        return (self.total + self.page_size - 1) // self.page_size
+    @model_validator(mode="after")
+    def _compute_total_pages(self) -> "PageResult[T]":
+        if self.page_size > 0:
+            self.total_pages = (self.total + self.page_size - 1) // self.page_size
+        return self
