@@ -62,7 +62,13 @@ class PurchaseRequisition(PKMixin, TimestampMixin, Base):
         server_default=PrStatus.DRAFT.value,
     )
     total_estimated_amount: Mapped[Decimal] = mapped_column(
-        Numeric(18, 4), nullable=False, server_default="0", comment="明细预估金额合计（服务端汇总）"
+        Numeric(18, 2), nullable=False, server_default="0", comment="明细预估金额合计（服务端汇总，ROUND_HALF_UP）"
+    )
+    submitted_at: Mapped[datetime | None] = mapped_column(
+        DATETIME(fsp=3), nullable=True, comment="提交时间（UTC，submit 时写入）"
+    )
+    version: Mapped[int] = mapped_column(
+        nullable=False, server_default="1", comment="乐观锁版本号（更新/提交/取消时递增）"
     )
     remark: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_by: Mapped[int | None] = mapped_column(
@@ -99,6 +105,7 @@ class PurchaseRequisitionItem(PKMixin, TimestampMixin, Base):
         Index("ix_pri_mat", "material_id"),
         Index("ix_pri_pr", "pr_id"),
         CheckConstraint("requested_quantity > 0", name="pri_qty_positive"),
+        CheckConstraint("estimated_unit_price >= 0", name="pri_price_nonneg"),
         CheckConstraint(
             "converted_quantity >= 0 AND converted_quantity <= requested_quantity",
             name="pri_converted_not_exceed",
@@ -124,10 +131,10 @@ class PurchaseRequisitionItem(PKMixin, TimestampMixin, Base):
         Numeric(18, 4), nullable=False, server_default="0", comment="预估单价，允许为 0（Q9）"
     )
     estimated_amount: Mapped[Decimal] = mapped_column(
-        Numeric(18, 4),
-        Computed("ROUND(requested_quantity * estimated_unit_price, 4)", persisted=True),
+        Numeric(18, 2),
         nullable=False,
-        comment="预估金额（生成列）",
+        server_default="0",
+        comment="预估金额（服务端计算：ROUND_HALF_UP(qty × price, 2)，非生成列）",
     )
     required_date: Mapped[date | None] = mapped_column(Date, nullable=True, comment="需求日期")
     remark: Mapped[str | None] = mapped_column(String(255), nullable=True)

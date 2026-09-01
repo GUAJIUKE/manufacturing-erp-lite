@@ -132,14 +132,21 @@
 
 **验收**：编码唯一且并发无重复（8 线程×5=40 全唯一）、被引用不可物理删除（停用制）、非零库存仓库禁停、策略唯一对/数值/范围校验、403 权限拦截、审计落库 → `pytest` 40/40 + 冒烟 18/18 → `feat: implement master data (materials/suppliers/warehouses/inventory policies)`
 
-### Phase 6 — 采购申请
+### Phase 6 — 采购申请 ✅ 已完成（2026-09-01）
 
-- PR 单头 + 明细 CRUD（同事务）
-- 状态机：`DRAFT → PENDING`，仅 DRAFT 可改
-- 编号生成（序列表 + 行锁）
-- 金额服务端重算
+- 数据模型：PR 单头（新增 `version` 乐观锁 + `submitted_at`；`total_estimated_amount` 收窄为 DECIMAL(18,2)）+ 明细（`estimated_amount` 由生成列改为服务端计算列 DECIMAL(18,2)；新增 `estimated_unit_price >= 0` CHECK）；`UNIQUE(pr_no)` / `UNIQUE(pr_id, line_no)`，允许同物料多行（不同需求日期/用途）
+- 编号：`PR-YYYYMMDD-0001` 按申请日分组取号（numbering_service `next_daily_code`），唯一/可读/并发安全/允许跳号/不回收，DB UNIQUE 兜底
+- 状态机集中定义：Phase 6 仅 `DRAFT→PENDING`（submit）、`DRAFT→CANCELLED`（cancel），其余转换一律 409；API 层禁止直接写 status
+- 创建：至少 1 条明细；`applicant_id`/`department_id` 为创建时快照（调岗不改历史单据）；客户端不可伪造 pr_no/状态/金额；Header+Items+审计同事务
+- 金额：`money.py` 统一 ROUND_HALF_UP（2 位）；`estimated_amount = ROUND_HALF_UP(qty×price,2)`，`total = Σ行金额`；提交时重算，杜绝 float
+- 编辑：仅 DRAFT 且本人（ADMIN 有管理能力）；Header+Items 单事务（任一明细非法整体回滚）；乐观锁 `WHERE version=?` 条件更新，冲突 409「单据已被其他操作修改，请刷新后重试」
+- submit/cancel：原子状态条件更新（`WHERE status=DRAFT`），并发提交恰好 1 个成功；submit 后业务内容冻结
+- 对象级权限：RBAC 权限点（复用 pr:view/create/update/submit/cancel）是第一层；第二层——APPLICANT 只能查看/操作自己的 PR，ADMIN 可管理全部，部门主管范围规则留给 Phase 7
+- 审计：`PR_CREATE/PR_UPDATE/PR_SUBMIT/PR_CANCEL`（AuditAction 24→26）；`operation_logs` 新增 `document_no` 列记录单据编号；GET 不审计
+- 迁移：`2026_09_01_1410-f2a7d3b5c9e1`（version/submitted_at/精度/CHECK/ENUM/document_no），模型与 schema 一致（`alembic check` 无 drift）
+- 期间修复：ORM-enabled UPDATE 默认 `synchronize_session='auto'`（MySQL 8.0.19+ RETURNING）导致 version 双加 → 显式 `synchronize_session=False`；新增明细必须 `pr.items.append()` 而非 `db.add()`（否则金额汇总漏行）；删除明细用 `pr.items.remove()` 同步集合
 
-**验收**：PENDING 不可修改、明细为空被拒、并发编号不重复 → `feat: implement purchase requisition`
+**验收**：编号格式与并发唯一（8 线程×5=40 无重复）、停用物料拦截、金额 HALF_UP 精度、乐观锁 409、并发 submit 单成功、对象级 403、审计四类落库 → `pytest` 67/67 + 冒烟 21/21 → `feat: implement purchase requisition (PR business document)`
 
 ### Phase 7 — 审批流程
 

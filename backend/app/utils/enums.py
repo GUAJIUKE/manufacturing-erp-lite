@@ -138,6 +138,9 @@ class RoleCode(StrEnum):
 class AuditAction(StrEnum):
     LOGIN = "LOGIN"
     LOGIN_FAILED = "LOGIN_FAILED"
+    # Phase 6: purchase requisition
+    PR_CREATE = "PR_CREATE"
+    PR_UPDATE = "PR_UPDATE"
     PR_SUBMIT = "PR_SUBMIT"
     PR_APPROVE = "PR_APPROVE"
     PR_REJECT = "PR_REJECT"

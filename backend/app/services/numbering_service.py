@@ -74,3 +74,17 @@ def format_code(prefix: str, seq: int) -> str:
 def next_code(db: Session, key: SequenceKey, prefix: str) -> str:
     """Convenience: allocate and format in one call (MAT/SUP/WH)."""
     return format_code(prefix, next_sequence_value(db, key))
+
+
+def next_daily_code(
+    db: Session, key: SequenceKey, prefix: str, sequence_date: date | None = None
+) -> str:
+    """Daily business code, e.g. PR-20260901-0001.
+
+    ``sequence_date`` is the business date whose day counter the sequence
+    advances (per-day reset; gaps allowed, never recycled). Defaults to
+    today when not given.
+    """
+    d = sequence_date or date.today()
+    seq = next_sequence_value(db, key, d)
+    return f"{prefix}-{d:%Y%m%d}-{seq:04d}"

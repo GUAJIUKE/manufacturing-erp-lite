@@ -15,6 +15,7 @@ from app.api.v1 import (
     departments,
     inventory_policies,
     materials,
+    purchase_requisitions,
     roles,
     suppliers,
     users,
@@ -33,6 +34,7 @@ api_router.include_router(materials.router)
 api_router.include_router(suppliers.router)
 api_router.include_router(warehouses.router)
 api_router.include_router(inventory_policies.router)
+api_router.include_router(purchase_requisitions.router)
 
 
 @api_router.get("/health", tags=["system"], summary="服务健康检查")

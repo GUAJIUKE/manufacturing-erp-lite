@@ -80,6 +80,7 @@ class OperationLog(PKMixin, Base):
     module: Mapped[str] = mapped_column(String(32), nullable=False, comment="所属模块")
     document_type: Mapped[str | None] = mapped_column(String(32), nullable=True, comment="关联单据类型")
     document_id: Mapped[int | None] = mapped_column(BigInteger(unsigned=True), nullable=True, comment="关联单据 ID")
+    document_no: Mapped[str | None] = mapped_column(String(32), nullable=True, comment="关联单据编号（如 PR-20260901-0001）")
     description: Mapped[str | None] = mapped_column(String(500), nullable=True, comment="操作描述")
     ip_address: Mapped[str | None] = mapped_column(String(45), nullable=True, comment="支持 IPv6")
     user_agent: Mapped[str | None] = mapped_column(String(255), nullable=True)
