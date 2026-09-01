@@ -326,7 +326,8 @@ def test_create_po_material_disabled(client: TestClient, db) -> None:
     assert r.status_code == 409 and r.json()["code"] == 3009, r.text  # MASTER_DATA_DISABLED
 
 
-def test_create_po_source_exceeds_ordered(client: TestClient, db) -> None:
+def test_create_po_source_sum_gt_ordered_rejected(client: TestClient, db) -> None:
+    """Review fix：来源合计 > 订购数量 → 5010 PO_SOURCE_QUANTITY_MISMATCH。"""
     _clean_po_data()
     admin = _auth(_login(client))
     mid = _create_material(client, admin)["id"]
@@ -340,6 +341,49 @@ def test_create_po_source_exceeds_ordered(client: TestClient, db) -> None:
                    "sources": [{"pr_item_id": pr["items"][0]["id"], "quantity": "12"}]}],
     })
     assert r.status_code == 409 and r.json()["code"] == 5010, r.text
+
+
+def test_create_po_source_sum_lt_ordered_rejected(client: TestClient, db) -> None:
+    """Review fix：来源合计 < 订购数量（差额无法追溯 PR）→ 5010。"""
+    _clean_po_data()
+    admin = _auth(_login(client))
+    mid = _create_material(client, admin)["id"]
+    sup = _create_supplier(client, admin)
+    pr = _mk_approved_pr(client, mid, qty="10")
+    b = _auth(_login(client, "wangwu", "demo123"))
+    # sources 合计 8 < ordered_quantity 10 → 5010（禁止无来源差额采购）
+    r = client.post("/api/v1/purchase-orders", headers=b, json={
+        "supplier_id": sup["id"],
+        "items": [{"material_id": mid, "ordered_quantity": "10", "unit_price": "1",
+                   "sources": [{"pr_item_id": pr["items"][0]["id"], "quantity": "8"}]}],
+    })
+    assert r.status_code == 409 and r.json()["code"] == 5010, r.text
+    # 空 sources 同样视为 0 != ordered → 5010（无来源手工采购未实现）
+    r = client.post("/api/v1/purchase-orders", headers=b, json={
+        "supplier_id": sup["id"],
+        "items": [{"material_id": mid, "ordered_quantity": "10", "unit_price": "1",
+                   "sources": []}],
+    })
+    assert r.status_code == 409 and r.json()["code"] == 5010, r.text
+
+
+def test_create_po_source_sum_eq_ordered_success(client: TestClient, db) -> None:
+    """Review fix：来源合计 == 订购数量 → 创建成功。"""
+    _clean_po_data()
+    admin = _auth(_login(client))
+    mid = _create_material(client, admin)["id"]
+    sup = _create_supplier(client, admin)
+    pr = _mk_approved_pr(client, mid, qty="10")
+    b = _auth(_login(client, "wangwu", "demo123"))
+    r = client.post("/api/v1/purchase-orders", headers=b, json={
+        "supplier_id": sup["id"],
+        "items": [{"material_id": mid, "ordered_quantity": "10", "unit_price": "1",
+                   "sources": [{"pr_item_id": pr["items"][0]["id"], "quantity": "10"}]}],
+    })
+    assert r.status_code == 200, r.text
+    po = r.json()["data"]
+    assert po["status"] == "DRAFT"
+    assert po["items"][0]["sources"][0]["quantity"] == "10.0000"
 
 
 def test_create_po_empty_items_rejected(client: TestClient, db) -> None:
@@ -401,6 +445,47 @@ def test_merge_two_prs_into_one_po(client: TestClient, db) -> None:
     z = _auth(_login(client, "zhangsan", "demo123"))
     assert _pr_detail(client, z, pr1["id"])["status"] == "CONVERTED"
     assert _pr_detail(client, z, pr2["id"])["status"] == "CONVERTED"
+
+
+def test_create_po_merge_two_pr_sources_one_item(client: TestClient, db) -> None:
+    """Review fix：一个 PO Item 关联两个 PR Item（Q4 合单），
+    两来源合计 5+5 == ordered 10 → 成功，两 PR 均转满 CONVERTED。"""
+    _clean_po_data()
+    admin = _auth(_login(client))
+    mid = _create_material(client, admin)["id"]
+    sup = _create_supplier(client, admin)
+    pr1 = _mk_approved_pr(client, mid, qty="5")
+    pr2 = _mk_approved_pr(client, mid, qty="5")
+    b = _auth(_login(client, "wangwu", "demo123"))
+    r = client.post("/api/v1/purchase-orders", headers=b, json={
+        "supplier_id": sup["id"],
+        "items": [{
+            "material_id": mid,
+            "ordered_quantity": "10",
+            "unit_price": "12.50",
+            "sources": [
+                {"pr_item_id": pr1["items"][0]["id"], "quantity": "5"},
+                {"pr_item_id": pr2["items"][0]["id"], "quantity": "5"},
+            ],
+        }],
+    })
+    assert r.status_code == 200, r.text
+    po = r.json()["data"]
+    assert len(po["items"]) == 1
+    srcs = po["items"][0]["sources"]
+    assert len(srcs) == 2
+    assert {s["pr_no"] for s in srcs} == {pr1["pr_no"], pr2["pr_no"]}
+    assert sum(Decimal(s["quantity"]) for s in srcs) == Decimal("10.0000")
+    z = _auth(_login(client, "zhangsan", "demo123"))
+    assert _pr_detail(client, z, pr1["id"])["status"] == "CONVERTED"
+    assert _pr_detail(client, z, pr2["id"])["status"] == "CONVERTED"
+    # 合单后两来源均已转满（PR CONVERTED），任一被再次引用 → 4002（非 APPROVED 不可转单）
+    r = client.post("/api/v1/purchase-orders", headers=b, json={
+        "supplier_id": sup["id"],
+        "items": [{"material_id": mid, "ordered_quantity": "1", "unit_price": "1",
+                   "sources": [{"pr_item_id": pr1["items"][0]["id"], "quantity": "1"}]}],
+    })
+    assert r.status_code == 409 and r.json()["code"] == 4002, r.text
 
 
 def test_convert_exceeds_remaining(client: TestClient, db) -> None:
@@ -726,11 +811,13 @@ def test_po_permission_matrix(client: TestClient, db) -> None:
     mid = _create_material(client, admin_h)["id"]
     sup = _create_supplier(client, admin_h)
     pr = _mk_approved_pr(client, mid)
-    # zhangsan（APPLICANT）无 po:create → 403
+    # zhangsan（APPLICANT）无 po:create → 403（权限校验先于业务校验）
     z = _auth(_login(client, "zhangsan", "demo123"))
     r = client.post("/api/v1/purchase-orders", headers=z, json={
         "supplier_id": sup["id"], "items": [{"material_id": mid, "ordered_quantity": "1",
-                                             "unit_price": "1", "sources": []}],
+                                             "unit_price": "1",
+                                             "sources": [{"pr_item_id": pr["items"][0]["id"],
+                                                          "quantity": "1"}]}],
     })
     assert r.status_code == 403, r.text
     # zhaoliu（WAREHOUSE）无 po:confirm → 403

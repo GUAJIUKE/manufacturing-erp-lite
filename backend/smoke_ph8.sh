@@ -61,7 +61,13 @@ NA=$(curl -s -X POST $BASE/purchase-orders -H "$WH" -H "Content-Type: applicatio
 check "DRAFT PR convert 4002" 4002 "$(echo "$NA" | J "['code']")"
 
 # --- confirm: zero-price blocked, then success -------------------------------
-POZ=$(curl -s -X POST $BASE/purchase-orders -H "$WH" -H "Content-Type: application/json" -d "{\"supplier_id\":$SUP,\"items\":[{\"material_id\":$MID,\"ordered_quantity\":\"1\",\"unit_price\":\"0\",\"sources\":[]}]}")
+# Review fix：无来源手工采购未实现，zero-price PO 也须挂 APPROVED PR 来源（sum == ordered）
+PRZ=$(curl -s -X POST $BASE/purchase-requisitions -H "$ZH" -H "Content-Type: application/json" -d "{\"items\":[{\"material_id\":$MID,\"requested_quantity\":\"1\",\"estimated_unit_price\":\"1\"}]}")
+PIDZ=$(echo "$PRZ" | J "['data']['id']"); PRITEMZ=$(echo "$PRZ" | J "['data']['items'][0]['id']")
+SUBZ=$(curl -s -X POST $BASE/purchase-requisitions/$PIDZ/submit -H "$ZH")
+VZ=$(echo "$SUBZ" | J "['data']['version']")
+curl -s -X POST $BASE/purchase-requisitions/$PIDZ/approve -H "$LH" -H "Content-Type: application/json" -d "{\"version\":$VZ}" > /dev/null
+POZ=$(curl -s -X POST $BASE/purchase-orders -H "$WH" -H "Content-Type: application/json" -d "{\"supplier_id\":$SUP,\"items\":[{\"material_id\":$MID,\"ordered_quantity\":\"1\",\"unit_price\":\"0\",\"sources\":[{\"pr_item_id\":$PRITEMZ,\"quantity\":\"1\"}]}]}")
 POZID=$(echo "$POZ" | J "['data']['id']"); POZV=$(echo "$POZ" | J "['data']['version']")
 ZP=$(curl -s -X POST $BASE/purchase-orders/$POZID/confirm -H "$WH" -H "Content-Type: application/json" -d "{\"version\":$POZV}")
 check "confirm zero price 5007" 5007 "$(echo "$ZP" | J "['code']")"

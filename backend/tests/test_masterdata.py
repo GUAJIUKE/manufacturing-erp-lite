@@ -112,8 +112,14 @@ def test_material_list_filters(client: TestClient, db) -> None:
     assert r.json()["data"]["total_pages"] >= 2
 
     # code 搜索（精确段）
+    # 编号单调递增，MAT 序列 >1000 后末 3 位会与历史残留 code 同段（如
+    # MAT-000999 / MAT-001999 末 3 位均为 "999"），故断言"目标必命中 +
+    # 命中项均同段"而非"仅命中目标"，消除测试库残留累积导致的偶发失败。
     r = client.get(f"/api/v1/materials?code={m1['material_code'][-3:]}", headers=headers)
-    assert all(m1["material_code"] in i["material_code"] for i in r.json()["data"]["items"])
+    items = r.json()["data"]["items"]
+    assert items, "code 搜索应至少命中目标物料"
+    assert any(i["material_code"] == m1["material_code"] for i in items), "code 搜索未命中目标物料"
+    assert all(i["material_code"].endswith(m1["material_code"][-3:]) for i in items)
 
     # name 模糊
     r = client.get("/api/v1/materials?name=钣金", headers=headers)

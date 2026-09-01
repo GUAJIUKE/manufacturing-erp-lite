@@ -84,7 +84,7 @@ class ErrorCode(IntEnum):
     PO_UNIT_PRICE_REQUIRED = 5007
     PO_CANCEL_HAS_RECEIPT = 5008
     PO_NOT_RECEIVABLE = 5009
-    PO_SOURCE_EXCEEDS_ORDERED = 5010
+    PO_SOURCE_QUANTITY_MISMATCH = 5010  # 来源数量合计必须严格等于订购数量（Review fix）
     PO_ITEM_NOT_FOUND = 5011
     # Phase 8: PO optimistic lock / concurrent processing (mirrors PR 4011/4012)
     PO_VERSION_CONFLICT = 5012  # 乐观锁：客户端 version 已过期

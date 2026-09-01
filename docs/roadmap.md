@@ -170,10 +170,10 @@
 
 ### Phase 8 — 采购订单 ✅ 已完成（2026-09-01）
 
-- PR → PO 转换（按 Q3/Q4：拆单 / 合并）：一个 PO 可合并多张 PR 的明细（Q4，sources 映射表 `purchase_order_item_sources`），一个 PR 明细可拆给多张 PO（Q3，`converted_quantity` 累积）；无来源采购允许（差额为 MOQ 等超采，须在 item.remark 说明）
-- 数量一致性（§9.2，架构规则 6）：逐 source CAS 更新 `converted_quantity + qty <= requested_quantity`，rowcount==0 → `PR_ITEM_CONVERT_EXCEEDED`(4009)，并发转单恰一成功；`SUM(sources.quantity) <= ordered_quantity` 预校验（`PO_SOURCE_EXCEEDS_ORDERED` 5010，uk_pois 唯一键防同一来源重复累加）
+- PR → PO 转换（按 Q3/Q4：拆单 / 合并）：一个 PO 可合并多张 PR 的明细（Q4，sources 映射表 `purchase_order_item_sources`），一个 PR 明细可拆给多张 PO（Q3，`converted_quantity` 累积）
+- 数量一致性（§9.2，架构规则 6 + Review fix）：每个 PO Item 的 `SUM(sources.quantity)` 必须**严格等于** `ordered_quantity`（小于或大于均拒绝 → `PO_SOURCE_QUANTITY_MISMATCH` 5010；当前业务模型仅支持 APPROVED PR → PO 转换，无来源手工采购未实现，空 sources 亦拒绝）；逐 source CAS 更新 `converted_quantity + qty <= requested_quantity`，rowcount==0 → `PR_ITEM_CONVERT_EXCEEDED`(4009)，并发转单恰一成功（uk_pois 唯一键防同一来源重复累加）
 - PR 头状态：仅当**全部明细** `converted_quantity = requested_quantity` 时置 `CONVERTED`（单条原子 UPDATE + NOT EXISTS 子查询判定，避免 REPEATABLE READ 快照漏判）；部分转出保持 `APPROVED` 可继续转单
-- 校验链：PR 存在且 `APPROVED`（R4，非 APPROVED → 4002）→ 供应商存在且 ACTIVE（R5，停用 → 5006）→ 物料存在且 ACTIVE（3009）→ 明细非空（R12，schema min_length=1）→ 数量/单价合法 → 来源合计 ≤ 采购数量 → 金额服务端重算（ROUND_HALF_UP 2 位）
+- 校验链：PR 存在且 `APPROVED`（R4，非 APPROVED → 4002）→ 供应商存在且 ACTIVE（R5，停用 → 5006）→ 物料存在且 ACTIVE（3009）→ 明细非空（R12，schema min_length=1）→ 数量/单价合法 → 来源合计 == 订购数量 → 金额服务端重算（ROUND_HALF_UP 2 位）
 - PO 确认（Q9）：DRAFT 允许单价为 0 暂存；confirm 时逐行强制 `unit_price > 0`（`PO_UNIT_PRICE_REQUIRED` 5007）→ `DRAFT→CONFIRMED`
 - PO 取消（R14 + §9.2 回退）：仅当 `SUM(received_quantity) == 0`（有收货 → `PO_CANCEL_HAS_RECEIPT` 5008）；`DRAFT/CONFIRMED→CANCELLED` 后逐 source CAS 回退 `converted_quantity`，PR 不再全部转完时原子回退 `APPROVED`
 - Q2 扩展：`APPROVED` 的 PR 允许取消，但存在非 CANCELLED 关联 PO 时禁止（`PR_CANCEL_HAS_ACTIVE_PO` 4008，实时 join 查询）；关联 PO 全部取消后可取消
@@ -181,9 +181,9 @@
 - 对象级权限：BUYER 只能操作自己创建的 PO（ADMIN override）；APPLICANT 仅见自己 PR 转出的 PO、DEPT_MANAGER 仅见本部门 PR 转出的 PO（sources→pr_item→PR 链路 EXISTS 子查询），BUYER/ADMIN/WAREHOUSE 全量（收货选单需要）
 - 审计：AuditAction 27→28（新增 `PO_CANCEL`）；`PO_CREATE`/`PO_CONFIRM`/`PO_CANCEL` 均含 document_no、version 变化、备注/原因
 - 迁移：`2026_09_01_1450-a1b2c3d4e5f6`（purchase_orders.version + total_amount 18,4→18,2 + purchase_order_items.amount 生成列→普通列（ROUND_HALF_UP 2 位，MySQL 需 drop+add）+ action ENUM 扩 28），dev+test `alembic check` 无 drift，downgrade/upgrade 往返验证通过
-- 期间修复：`_visible_source_stmt` 子查询去掉 LIMIT（MySQL 不允许 `IN (SELECT ... LIMIT 1)`）；Q2 测试场景改为部分转出（全转完是 CONVERTED，取消走 4002）；DECIMAL(18,4) 数量 JSON 序列化为 4 位小数（断言修正）；PR/approval 测试清理函数纳入 PO 表（sources FK RESTRICT 阻塞旧清理）
+- 期间修复：`_visible_source_stmt` 子查询去掉 LIMIT（MySQL 不允许 `IN (SELECT ... LIMIT 1)`）；Q2 测试场景改为部分转出（全转完是 CONVERTED，取消走 4002）；DECIMAL(18,4) 数量 JSON 序列化为 4 位小数（断言修正）；PR/approval 测试清理函数纳入 PO 表（sources FK RESTRICT 阻塞旧清理）；**Review fix**：来源合计校验由 `<=` 收紧为 `==`（`PO_SOURCE_EXCEEDS_ORDERED` 5010 → `PO_SOURCE_QUANTITY_MISMATCH` 5010，禁止无来源/差额采购），smoke zero-price 场景补 APPROVED PR 来源；test_masterdata code 搜索断言加固（MAT 序列 >1000 后末 3 位与历史残留同段导致偶发失败）
 
-**验收**：非 APPROVED 的 PR 不可转单（4002）、无供应商/停用供应商被拒（404/5006）、拆单两 PO 后 PR 全转完 CONVERTED、合单两 PR 进一 PO、超转 4009、并发转单单成功、confirm 单价 0 被拒（5007）、取消回退 converted_quantity + PR 回退 APPROVED、已收货不可取消（5008）、Q2 有 active PO 4008、乐观锁 5012、并发 confirm 单成功、403 矩阵、列表可见范围 → `pytest` 135/135 + 冒烟 23/23 → `feat: implement purchase order`
+**验收**：非 APPROVED 的 PR 不可转单（4002）、无供应商/停用供应商被拒（404/5006）、拆单两 PO 后 PR 全转完 CONVERTED、合单两 PR 进一 PO、单 item 多来源合单（5+5==10 成功且两 PR CONVERTED）、来源合计 < / > 订购数量均 5010、超转 4009、并发转单单成功、confirm 单价 0 被拒（5007）、取消回退 converted_quantity + PR 回退 APPROVED、已收货不可取消（5008）、Q2 有 active PO 4008、乐观锁 5012、并发 confirm 单成功、403 矩阵、列表可见范围 → `pytest` 138/138 + 冒烟 23/23 → `fix: enforce PO source quantity strict equality`（Review 修正，独立 commit）
 
 ### Phase 9 — 采购入库与库存 ⭐ 核心
 

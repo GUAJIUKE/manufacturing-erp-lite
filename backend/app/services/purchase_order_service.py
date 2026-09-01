@@ -304,7 +304,9 @@ def create_po(
                 code=ErrorCode.PR_INVALID_STATUS_TRANSITION,
             )
 
-    # --- 预校验 2：物料 ACTIVE；数量/单价合法；来源合计 ≤ 采购数量（§4.5 约束 2） ---
+    # --- 预校验 2：物料 ACTIVE；数量/单价合法；来源合计必须严格等于订购数量 ---
+    # （Review fix：当前业务模型仅支持 APPROVED PR -> PO 转换，无来源手工采购
+    #   未实现，故 SUM(sources.quantity) 必须 == ordered_quantity，小于或大于均拒绝）
     for item in data.items:
         _assert_material_active(db, item.material_id)
         if item.ordered_quantity <= 0:
@@ -312,10 +314,10 @@ def create_po(
         if item.unit_price < 0:
             raise ValidationException("明细采购单价不能为负数")
         total_src = sum((s.quantity for s in item.sources), Decimal("0"))
-        if total_src > item.ordered_quantity:
+        if total_src != item.ordered_quantity:
             raise ConflictException(
-                f"明细来源数量合计 {total_src} 超过采购数量 {item.ordered_quantity}",
-                code=ErrorCode.PO_SOURCE_EXCEEDS_ORDERED,
+                f"明细来源数量合计 {total_src} 必须严格等于采购数量 {item.ordered_quantity}",
+                code=ErrorCode.PO_SOURCE_QUANTITY_MISMATCH,
             )
 
     order_date = data.order_date or date.today()
