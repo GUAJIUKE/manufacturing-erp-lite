@@ -31,6 +31,9 @@ from app.models import (
     ApprovalRecord,
     DepartmentManager,
     OperationLog,
+    PurchaseOrder,
+    PurchaseOrderItem,
+    PurchaseOrderItemSource,
     PurchaseRequisition,
     PurchaseRequisitionItem,
     Role,
@@ -53,9 +56,12 @@ def _auth(token: str) -> dict[str, str]:
 
 
 def _clean_prs() -> None:
-    """Wipe PR + items + approval_records before each test (repeatable runs).
-    Never touches number_sequences — daily PR counters are monotonic."""
+    """Wipe PR + items + approval_records (and any leftover PO data: sources
+    FK RESTRICT blocks PR item deletion, Phase 8) before each test."""
     with SessionLocal() as s:
+        s.execute(delete(PurchaseOrderItemSource))
+        s.execute(delete(PurchaseOrderItem))
+        s.execute(delete(PurchaseOrder))
         s.execute(delete(ApprovalRecord))
         s.execute(delete(PurchaseRequisitionItem))
         s.execute(delete(PurchaseRequisition))

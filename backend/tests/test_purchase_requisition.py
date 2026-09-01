@@ -21,6 +21,9 @@ from app.db.session import SessionLocal
 from app.models import (
     Department,
     OperationLog,
+    PurchaseOrder,
+    PurchaseOrderItem,
+    PurchaseOrderItemSource,
     PurchaseRequisition,
     PurchaseRequisitionItem,
     User,
@@ -44,9 +47,15 @@ def _auth(token: str) -> dict[str, str]:
 
 def _clean_prs() -> None:
     """API sessions commit outside the test fixture's transaction; wipe the
-    PR tables before each test so runs are repeatable (never touch
-    number_sequences — daily PR counters are monotonic, Phase 5 lesson)."""
+    PR (and any leftover PO) tables before each test so runs are repeatable
+    (never touch number_sequences — daily PR counters are monotonic,
+    Phase 5 lesson). PO tables first: sources FK (RESTRICT) blocks PR item
+    deletion, Phase 8."""
+
     with SessionLocal() as s:
+        s.execute(delete(PurchaseOrderItemSource))
+        s.execute(delete(PurchaseOrderItem))
+        s.execute(delete(PurchaseOrder))
         s.execute(delete(PurchaseRequisitionItem))
         s.execute(delete(PurchaseRequisition))
         s.commit()

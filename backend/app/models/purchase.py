@@ -10,7 +10,6 @@ from decimal import Decimal
 
 from sqlalchemy import (
     CheckConstraint,
-    Computed,
     Date,
     Enum as SAEnum,
     ForeignKey,
@@ -179,7 +178,10 @@ class PurchaseOrder(PKMixin, TimestampMixin, Base):
         server_default=PoStatus.DRAFT.value,
     )
     total_amount: Mapped[Decimal] = mapped_column(
-        Numeric(18, 4), nullable=False, server_default="0", comment="明细金额合计（服务端汇总）"
+        Numeric(18, 2), nullable=False, server_default="0", comment="明细金额合计（服务端汇总，ROUND_HALF_UP）"
+    )
+    version: Mapped[int] = mapped_column(
+        nullable=False, server_default="1", comment="乐观锁版本号（更新/确认/取消时递增）"
     )
     remark: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_by: Mapped[int | None] = mapped_column(
@@ -238,10 +240,10 @@ class PurchaseOrderItem(PKMixin, TimestampMixin, Base):
         Numeric(18, 4), nullable=False, server_default="0", comment="采购单价（confirm 时强制 > 0）"
     )
     amount: Mapped[Decimal] = mapped_column(
-        Numeric(18, 4),
-        Computed("ROUND(ordered_quantity * unit_price, 4)", persisted=True),
+        Numeric(18, 2),
         nullable=False,
-        comment="金额（生成列）",
+        server_default="0",
+        comment="金额（服务端计算：ROUND_HALF_UP(ordered_quantity × unit_price, 2)，非生成列）",
     )
     remark: Mapped[str | None] = mapped_column(String(255), nullable=True)
 

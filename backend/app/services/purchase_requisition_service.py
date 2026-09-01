@@ -44,6 +44,9 @@ from app.models import (
     Department,
     DepartmentManager,
     Material,
+    PurchaseOrder,
+    PurchaseOrderItem,
+    PurchaseOrderItemSource,
     PurchaseRequisition,
     PurchaseRequisitionItem,
     User,
@@ -61,6 +64,7 @@ from app.utils.enums import (
     AuditAction,
     DeptStatus,
     DocumentType,
+    PoStatus,
     PrStatus,
     RoleCode,
     SequenceKey,
@@ -74,14 +78,17 @@ _DOCUMENT_TYPE = "PURCHASE_REQUISITION"
 # Status machine (Phase 6 §十二 / Phase 7 §二): the single source of truth.
 # Phase 7 adds: PENDING -> APPROVED / REJECTED (approve/reject),
 # REJECTED -> DRAFT (revise, then edit + resubmit DRAFT -> PENDING).
+# Phase 8 adds (Q2): APPROVED -> CANCELLED — allowed only when the PR has no
+# active (non-cancelled) PO, checked in cancel_pr (4008).
 # Forbidden transitions stay out of the map: DRAFT -> APPROVED/REJECTED,
-# PENDING -> DRAFT, APPROVED -> anything, CANCELLED -> anything,
-# REJECTED -> PENDING (must go through DRAFT first).
+# PENDING -> DRAFT, APPROVED -> PENDING/CONVERTED (handled by PO service),
+# CANCELLED -> anything, REJECTED -> PENDING (must go through DRAFT first).
 # ----------------------------------------------------------------------
 _TRANSITIONS: dict[PrStatus, frozenset[PrStatus]] = {
     PrStatus.DRAFT: frozenset({PrStatus.PENDING, PrStatus.CANCELLED}),
     PrStatus.PENDING: frozenset({PrStatus.APPROVED, PrStatus.REJECTED}),
     PrStatus.REJECTED: frozenset({PrStatus.DRAFT}),
+    PrStatus.APPROVED: frozenset({PrStatus.CANCELLED}),  # Phase 8 Q2
 }
 
 
@@ -574,14 +581,40 @@ def cancel_pr(
 ) -> PurchaseRequisition:
     pr = _load(db, pr_id)
     _assert_self_or_admin(pr, user)
-    _assert_transition(pr, PrStatus.CANCELLED)
+    _assert_transition(pr, PrStatus.CANCELLED)  # DRAFT / APPROVED -> CANCELLED（Phase 8 Q2）
+
+    if pr.status == PrStatus.APPROVED:
+        # Q2 限制：已转 PO（存在非 CANCELLED 的关联订单）的 PR 禁止取消，
+        # 避免 PR 已取消但 PO 仍活跃的数据不一致（4008）。
+        has_active_po = db.execute(
+            select(PurchaseOrder.id)
+            .join(PurchaseOrderItem, PurchaseOrderItem.po_id == PurchaseOrder.id)
+            .join(
+                PurchaseOrderItemSource,
+                PurchaseOrderItemSource.po_item_id == PurchaseOrderItem.id,
+            )
+            .join(
+                PurchaseRequisitionItem,
+                PurchaseRequisitionItem.id == PurchaseOrderItemSource.pr_item_id,
+            )
+            .where(
+                PurchaseRequisitionItem.pr_id == pr.id,
+                PurchaseOrder.status != PoStatus.CANCELLED,
+            )
+            .limit(1)
+        ).scalar_one_or_none()
+        if has_active_po is not None:
+            raise ConflictException(
+                "该采购申请已转采购订单，不能取消",
+                code=ErrorCode.PR_CANCEL_HAS_ACTIVE_PO,
+            )
 
     old_version = pr.version
     result = db.execute(
         update(PurchaseRequisition)
         .where(
             PurchaseRequisition.id == pr_id,
-            PurchaseRequisition.status == PrStatus.DRAFT,
+            PurchaseRequisition.status.in_([PrStatus.DRAFT, PrStatus.APPROVED]),
         )
         .values(
             status=PrStatus.CANCELLED,

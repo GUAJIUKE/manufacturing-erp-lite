@@ -2,7 +2,7 @@
 
 **制造企业采购库存协同系统** — 面向小型研发制造企业的轻量级 ERP 系统。
 
-> 当前阶段：**Phase 7 审批工作流已完成**（PENDING→APPROVED / PENDING→REJECTED / REJECTED→DRAFT + 部门主管对象级审批 + approval_records 审批历史 + ADMIN override 审计 + 并发审批原子性 + 103 项测试通过）。下一步：Phase 8 采购订单，等待 Review。
+> 当前阶段：**Phase 8 采购订单已完成**（PR→PO 转换 + 拆单/合单来源映射 + PO 确认/取消 + 数量一致性 CAS + 乐观锁 + 135 项测试通过）。下一步：Phase 9 采购入库与库存，等待 Review。
 
 ---
 
