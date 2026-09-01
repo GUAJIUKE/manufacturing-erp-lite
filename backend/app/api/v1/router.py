@@ -10,7 +10,16 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.api.v1 import auth, departments, roles, users
+from app.api.v1 import (
+    auth,
+    departments,
+    inventory_policies,
+    materials,
+    roles,
+    suppliers,
+    users,
+    warehouses,
+)
 from app.core.response import ApiResponse
 from app.db.session import get_db
 
@@ -20,6 +29,10 @@ api_router.include_router(users.router)
 api_router.include_router(roles.router)
 api_router.include_router(roles.permission_router)
 api_router.include_router(departments.router)
+api_router.include_router(materials.router)
+api_router.include_router(suppliers.router)
+api_router.include_router(warehouses.router)
+api_router.include_router(inventory_policies.router)
 
 
 @api_router.get("/health", tags=["system"], summary="服务健康检查")

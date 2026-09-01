@@ -118,14 +118,19 @@
 
 **验收**：登录、无 token 401、无权限 403、密码哈希不可逆、停用账号 403 → `pytest` 23/23 通过 → `feat: implement auth and RBAC`
 
-### Phase 5 — 主数据
+### Phase 5 — 主数据 ✅ 已完成（2026-09-01）
 
-- 物料 CRUD（编码自动生成、唯一校验、软删除）
-- 供应商 CRUD
-- 仓库 CRUD（初始化 1 个主仓库）
-- 分页 + 关键字/状态筛选
+- 物料：`MAT-000001` 自动编码（numbering_service 单语句 upsert + `LAST_INSERT_ID`，并发安全/不连续/不回收）；name 不要求全局唯一；被 PR/PO/库存引用禁删（停用优先）；停用后禁止新建 PR 明细/PO 明细/库存策略；列表分页 + code 精确 + name 模糊 + category/status 筛选
+- 供应商：`SUP-000001` 自动编码；name 不强制唯一（历史变更/分公司）；停用后禁止新建 PO；被 PO 引用禁删
+- 仓库：`WH-000001` 自动编码；被 balance/transaction/receipt 引用禁删；**停用时若非零库存 → `WAREHOUSE_HAS_STOCK(3010)` 拒绝**；停用后禁止新入库/新策略
+- 库存策略：`UNIQUE(warehouse_id, material_id)`（安全库存不绑定 material 表）；`safety_stock>=0`、`reorder_point>=0`、`max_stock>0`；同时配置强制 `safety<=reorder<=max`；material/warehouse 停用后禁止新建/修改；`safety_stock` 不复制到 inventory_balance（Dashboard 低安全库存后续 policy+balance 联查）
+- 编号服务 `numbering_service.py`：MAT/SUP/WH 共用 `number_sequences`，全局键 1970-01-01；INSERT 分支显式 `LAST_INSERT_ID(1)`（否则返回表自增主键导致首次取号错误大号）
+- 删除策略：**统一不开放 DELETE API**，只提供 disable/enable（引用关系复杂，物理删除风险高）；从未被引用数据也不提供物理删除入口
+- 权限：复用 `material:*` / `supplier:*` / `warehouse:*`（view/create/update/delete→disable 语义），新增 `inventory_policy:view/create/update`（44→47 权限点）
+- 审计：MATERIAL/SUPPLIER/WAREHOUSE 的 CREATE/UPDATE/DISABLE/ENABLE + `INVENTORY_POLICY_CHANGE`（AuditAction 11→24）
+- 迁移：`2026_09_01_1345-9f2e7c1a4b8d`（operation_logs.action ENUM 扩展至 26 值 + `max_stock` CHECK 改 `> 0`），模型同步
 
-**验收**：编码唯一冲突 409、被引用数据不可物理删除 → `feat: add material and supplier master data`
+**验收**：编码唯一且并发无重复（8 线程×5=40 全唯一）、被引用不可物理删除（停用制）、非零库存仓库禁停、策略唯一对/数值/范围校验、403 权限拦截、审计落库 → `pytest` 40/40 + 冒烟 18/18 → `feat: implement master data (materials/suppliers/warehouses/inventory policies)`
 
 ### Phase 6 — 采购申请
 

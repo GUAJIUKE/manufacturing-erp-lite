@@ -136,7 +136,7 @@ class InventoryPolicy(PKMixin, TimestampMixin, Base):
         Index("ix_invpol_mat", "material_id"),
         CheckConstraint("safety_stock >= 0", name="safety_stock_nonneg"),
         CheckConstraint("min_stock IS NULL OR min_stock >= 0", name="min_stock_nonneg"),
-        CheckConstraint("max_stock IS NULL OR max_stock >= 0", name="max_stock_nonneg"),
+        CheckConstraint("max_stock IS NULL OR max_stock > 0", name="max_stock_nonneg"),
         CheckConstraint("reorder_point IS NULL OR reorder_point >= 0", name="reorder_point_nonneg"),
     )
 

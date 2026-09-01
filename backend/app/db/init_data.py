@@ -115,6 +115,10 @@ PERMISSIONS: list[tuple[str, str, str]] = [
     # 库存
     ("inventory:view", "查看库存", "inventory"),
     ("inventory_txn:view", "查看库存流水", "inventory"),
+    # 库存策略（安全库存，Phase 5 新增）
+    ("inventory_policy:view", "查看库存策略", "inventory_policy"),
+    ("inventory_policy:create", "新建库存策略", "inventory_policy"),
+    ("inventory_policy:update", "编辑库存策略", "inventory_policy"),
     # 首页
     ("dashboard:view", "查看首页", "dashboard"),
 ]
@@ -151,6 +155,7 @@ ROLE_PERMISSIONS: dict[RoleCode, set[str]] = {
         "material:view", "material:update",
         "supplier:view", "supplier:create", "supplier:update", "supplier:delete",
         "warehouse:view",
+        "inventory_policy:view", "inventory_policy:create", "inventory_policy:update",
         "pr:view",
         "po:view", "po:create", "po:update", "po:delete", "po:confirm", "po:cancel",
         "receipt:view",
@@ -161,6 +166,7 @@ ROLE_PERMISSIONS: dict[RoleCode, set[str]] = {
         "warehouse:view", "po:view",
         "receipt:view", "receipt:create", "receipt:reverse",
         "inventory:view", "inventory_txn:view",
+        "inventory_policy:view",
         "dashboard:view",
     },
 }
@@ -300,6 +306,7 @@ def run() -> None:
     finally:
         db.close()
     print(f"[init_data] 完成：{stats}")
+    return stats
 
 
 if __name__ == "__main__":
