@@ -1259,3 +1259,125 @@ def test_warehouse_with_stock_cannot_be_disabled(client: TestClient, db) -> None
     assert client.post(f"/api/v1/purchase-receipts/{rid}/reverse", headers=wh_h,
                        json={"reason": "清空库存"}).status_code == 200
     assert client.post(f"/api/v1/warehouses/{wh}/disable", headers=admin).status_code == 200
+
+
+# ======================================================================
+# Review Fix §3：交叉双物料并发入库（#43 锁序重构验证）
+# ======================================================================
+def test_cross_material_concurrent_receipts_no_deadlock(client: TestClient, db) -> None:
+    """PO_X 行序 [A, B] 与 PO_Y 行序 [B, A] 两 Receipt 并发同仓入库，多轮重复。
+
+    Review Fix §3 / #43：余额锁必须全量预排序后按 (warehouse_id, material_id)
+    升序一次性取齐（lock_balances）。若按各 PO 自身的行序逐个锁余额，
+    两个行序相反的入库单并发时会形成 A→B 与 B→A 的交叉等待 → InnoDB
+    死锁（1213 → 500）。本测试断言：
+
+    - 无未处理 deadlock：所有并发请求均 200（服务层不做 1213 重试，
+      出现死锁即 500，直接判失败）；
+    - 原子性：每张成功的入库单两条明细全部落库；
+    - Balance A/B 数量与金额正确；
+    - Transaction 数量与金额正确（每明细一条 PURCHASE_IN）；
+    - 无 Lost Update：余额 == 全部入库之和。
+    """
+    _clean_all()
+    admin = _auth(_login(client))
+    ma = _create_material(client, admin, "交叉并发物料A")["id"]
+    mb = _create_material(client, admin, "交叉并发物料B")["id"]
+    sup = _create_supplier(client, admin)["id"]
+    wh = _create_warehouse(client, admin)["id"]
+    wangwu = _auth(_login(client, "wangwu", "demo123"))
+    wh_h = _wh_headers(client)
+
+    # 预置两行余额（quantity=0）：并发全部落在 X 锁竞争路径上，避免
+    # 首行 INSERT 路径干扰锁序验证。
+    with SessionLocal() as s:
+        s.rollback()
+        for mid in (ma, mb):
+            s.execute(text(
+                "INSERT INTO inventory_balances"
+                " (warehouse_id, material_id, quantity, total_amount,"
+                "  average_unit_cost, version)"
+                " VALUES (:w, :m, 0, 0, 0, 0)"
+            ), {"w": wh, "m": mid})
+        s.commit()
+
+    rounds = 4
+    qty = "5"           # 每行收满 5
+    expected = 2 * rounds * int(qty)   # A/B 各 2×rounds 行 × 5
+
+    def _mk_cross_pairs() -> tuple[dict, dict]:
+        """PO_X 行序 [A, B]；PO_Y 行序 [B, A]。返回已 CONFIRMED 的 (po_x, po_y)。"""
+        # --- PO_X：A 在前 B 在后 ---
+        pr_ax = _mk_approved_pr(client, ma, qty=qty)
+        pr_bx = _mk_approved_pr(client, mb, qty=qty)
+        po_x = _mk_po(client, sup, [
+            {"pr_id": pr_ax["id"], "pr_item_id": pr_ax["items"][0]["id"],
+             "quantity": qty, "ordered_quantity": qty},
+            {"pr_id": pr_bx["id"], "pr_item_id": pr_bx["items"][0]["id"],
+             "quantity": qty, "ordered_quantity": qty},
+        ])
+        assert [i["material_id"] for i in po_x["items"]] == [ma, mb]
+        po_x = _confirm_po(client, wangwu, po_x["id"], po_x["version"])
+        # --- PO_Y：B 在前 A 在后（行序与 PO_X 相反）---
+        pr_by = _mk_approved_pr(client, mb, qty=qty)
+        pr_ay = _mk_approved_pr(client, ma, qty=qty)
+        po_y = _mk_po(client, sup, [
+            {"pr_id": pr_by["id"], "pr_item_id": pr_by["items"][0]["id"],
+             "quantity": qty, "ordered_quantity": qty},
+            {"pr_id": pr_ay["id"], "pr_item_id": pr_ay["items"][0]["id"],
+             "quantity": qty, "ordered_quantity": qty},
+        ])
+        assert [i["material_id"] for i in po_y["items"]] == [mb, ma]
+        po_y = _confirm_po(client, wangwu, po_y["id"], po_y["version"])
+        return po_x, po_y
+
+    def _receipt_payload(po: dict) -> dict:
+        return {"po_id": po["id"], "warehouse_id": wh,
+                "items": [{"po_item_id": it["id"], "received_quantity": qty}
+                          for it in po["items"]]}
+
+    failures: list[str] = []
+    lock = threading.Lock()
+    all_pos: list[dict] = []
+
+    for _ in range(rounds):
+        po_x, po_y = _mk_cross_pairs()
+        all_pos.extend([po_x, po_y])
+        barrier = threading.Barrier(2)
+        results: list[int] = []
+
+        def worker(po: dict) -> None:
+            barrier.wait()
+            r = _post_receipt(client, wh_h, po["id"], wh,
+                              [{"po_item_id": it["id"], "received_quantity": qty}
+                               for it in po["items"]])
+            with lock:
+                results.append(r.status_code)
+                if r.status_code != 200:
+                    failures.append(r.text[:300])
+
+        threads = [threading.Thread(target=worker, args=(p,))
+                   for p in (po_x, po_y)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        assert sorted(results) == [200, 200], f"round deadlock/conflict: {failures}"
+
+    assert failures == [], failures
+    assert len(_txns(transaction_type=TxnType.PURCHASE_IN)) == 2 * rounds * 2  # 2 单据 × 2 明细 × rounds
+
+    for mid in (ma, mb):
+        bal = _balance(wh, mid)
+        assert bal is not None
+        assert f"{bal['quantity']}" == f"{expected}.0000", f"Lost update on {mid}"
+        assert f"{bal['total_amount']}" == f"{expected * 10}.00"  # 单价 10.0000
+        tx_a = _txns(material_id=mid, transaction_type=TxnType.PURCHASE_IN)
+        assert len(tx_a) == 2 * rounds
+        assert f"{sum(t.quantity for t in tx_a)}" == f"{expected}.0000"
+        assert f"{sum(t.amount for t in tx_a)}" == f"{expected * 10}.00"
+
+    # 每张 PO 都应整体收满 → RECEIVED（原子性 + 状态推导正确）
+    b = _auth(_login(client, "wangwu", "demo123"))
+    for po in all_pos:
+        assert _po_detail(client, b, po["id"])["status"] == "RECEIVED"

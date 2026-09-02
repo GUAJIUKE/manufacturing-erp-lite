@@ -14,7 +14,8 @@ Two distinct concepts, never conflated (Phase 9 §二):
 Concurrency (Phase 9 §十四)
 ---------------------------
 The balance row is never read-then-written in Python without a lock. Every
-mutation goes through :func:`lock_balance`, which
+mutation goes through :func:`lock_balance` — callers acquire their whole set
+of balance rows up front through :func:`lock_balances` — which
 
 1. issues ``INSERT ... ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id)`` —
    a MySQL upsert that takes an **exclusive lock on the existing row** on
@@ -27,12 +28,17 @@ Holding that row lock until COMMIT is what makes the moving-average update
 safe: the second inbound waits, then computes from the first one's result
 instead of overwriting it (no lost update).
 
-Lock ordering (Phase 9 §十五)
------------------------------
-Callers must sort the keys they touch by ``(warehouse_id, material_id)``
-ascending before locking. All balance locks inside one transaction are
-therefore acquired in one global order, which removes the classic
-A-locks-1-then-2 / B-locks-2-then-1 deadlock.
+Lock ordering (Phase 9 §十五 / Review Fix §2)
+----------------------------------------------
+The balance row is **never** locked in "line / encounter order". Every
+caller must acquire its balance locks through :func:`lock_balances`, which
+deduplicates the keys, sorts them by ``(warehouse_id, material_id)``
+ascending and takes **all** the locks in that one pre-sorted pass — before
+the transaction touches any other business row (the receipt header insert
+and its FK shared locks come *after* the balance locks). A global order for
+every balance lock removes the classic A-locks-1-then-2 /
+B-locks-2-then-1 deadlock, and a single entry point makes the rule hold by
+construction for future callers (ADJUST / PRODUCTION receipts etc.).
 
 Costing (Phase 9 §十二 / §十九)
 ------------------------------
@@ -45,6 +51,7 @@ different price must not distort the reversal (§十九).
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from datetime import date, datetime
 from decimal import Decimal
 
@@ -123,6 +130,28 @@ def lock_balance(db: Session, warehouse_id: int, material_id: int) -> InventoryB
         .with_for_update()
     ).scalar_one()
     return row
+
+
+def lock_balances(
+    db: Session,
+    keys: Iterable[tuple[int, int]],
+) -> tuple[list[tuple[int, int]], dict[tuple[int, int], InventoryBalance]]:
+    """Acquire X-locks for *all* balance keys in one pre-sorted pass.
+
+    Review Fix §2 — the only sanctioned way to lock balances. The keys are
+    deduplicated and sorted ascending by ``(warehouse_id, material_id)``
+    *first*, then every row is locked in that order, and the caller must do
+    so **before** touching any other business row inside the transaction
+    (in particular before inserting the receipt header, whose FK checks
+    take shared locks on the PO / warehouse rows — those must never be held
+    while waiting for a balance lock, or two concurrent creates for the same
+    PO can deadlock on PO-row vs balance-row).
+
+    Returns ``(ordered_keys, locks)``: iterate ``ordered_keys`` for the
+    later apply pass so the write-back happens in the same canonical order.
+    """
+    ordered = sort_keys(keys)
+    return ordered, {k: lock_balance(db, *k) for k in ordered}
 
 
 def _new_average(total_amount: Decimal, quantity: Decimal) -> Decimal:
@@ -230,7 +259,10 @@ def write_transaction(
 
     ``quantity`` is signed: positive for inbound types, negative for
     ``PURCHASE_IN_REVERSAL`` / outbound types. ``amount`` carries the same
-    sign so ``SUM(amount)`` reconciles with ``SUM(quantity)``.
+    sign so ``SUM(amount)`` reconciles with ``balance.total_amount``
+    (Review Fix §1): inbound rows write a positive amount, reversal rows a
+    negative amount. ``unit_cost`` is always >= 0 (a price, not a signed
+    value).
     """
     if txn_type in _OUTBOUND_TYPES and quantity >= 0:
         raise ConflictException(
@@ -242,6 +274,14 @@ def write_transaction(
         )
     if unit_cost < 0:
         raise ConflictException("计价单价不能为负数", code=ErrorCode.VALIDATION_ERROR)
+    # amount 必须与 quantity 同号（Review Fix §1）：入库为正、冲销/出库为负，
+    # 否则 SUM(amount) 无法与 balance.total_amount 对账。0 仅允许出现在
+    # 极小 qty×unit_cost 舍入为 0.00 的合法边界，正常业务必须非零同号。
+    if (quantity > 0 and amount < 0) or (quantity < 0 and amount > 0):
+        raise ConflictException(
+            "流水金额符号必须与数量一致（入库为正、冲销/出库为负）",
+            code=ErrorCode.VALIDATION_ERROR,
+        )
 
     txn = InventoryTransaction(
         txn_no=_next_txn_no(db, occurred_at.date()),

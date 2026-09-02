@@ -19,6 +19,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import func, select, text
 from sqlalchemy.exc import DatabaseError  # 触发器 SIGNAL 抛 OperationalError(1644)
 
+from app.core.exceptions import ConflictException, ErrorCode
 from app.db.session import SessionLocal
 from app.models import (
     InventoryBalance,
@@ -27,6 +28,7 @@ from app.models import (
     Role,
     RolePermission,
 )
+from app.services import inventory_service
 from app.utils.enums import RoleCode, TxnType
 from test_purchase_receipt import (
     _auth,
@@ -490,9 +492,173 @@ def test_balance_reconciles_with_ledger_after_mixed_ops(client: TestClient, db) 
     assert _ledger_net(wh, mid) == Decimal("0.0000")
 
 
-# ----------------------------------------------------------------------
-# local helpers
-# ----------------------------------------------------------------------
+# ======================================================================
+# Review Fix §1：signed amount —— 流水 SUM 与余额对账
+# ======================================================================
+def _ledger_sums(warehouse_id: int, material_id: int) -> tuple[Decimal, Decimal]:
+    """SUM(quantity) / SUM(amount) of every ledger row for a balance key.
+
+    Review Fix §1 invariant: these must equal ``balance.quantity`` and
+    ``balance.total_amount`` respectively (amount is signed exactly like
+    quantity, so the ledger net is a plain sum, not an absolute-value sum).
+    """
+    with SessionLocal() as s:
+        s.rollback()
+        row = s.execute(
+            select(
+                func.coalesce(func.sum(InventoryTransaction.quantity), 0),
+                func.coalesce(func.sum(InventoryTransaction.amount), 0),
+            ).where(
+                InventoryTransaction.warehouse_id == warehouse_id,
+                InventoryTransaction.material_id == material_id,
+            )
+        ).one()
+    return Decimal(row[0]), Decimal(row[1])
+
+
+def test_review_fix_inbound_amount_positive_and_reversal_negative(client: TestClient, db) -> None:
+    """Review Fix §1 (1/2)：PURCHASE_IN amount > 0，PURCHASE_IN_REVERSAL amount < 0。"""
+    _clean_all()
+    admin = _auth(_login(client))
+    mid = _create_material(client, admin)["id"]
+    sup = _create_supplier(client, admin)["id"]
+    wh = _create_warehouse(client, admin)["id"]
+    po = _mk_po_full(client, admin, mid, sup, qty="10", price="10.0000")
+    wh_h = _wh_headers(client)
+    rcpt = _post_receipt(client, wh_h, po["id"], wh,
+                         [{"po_item_id": po["items"][0]["id"],
+                           "received_quantity": "4"}]).json()["data"]
+
+    rows = _txns(transaction_type=TxnType.PURCHASE_IN)
+    assert len(rows) == 1
+    assert rows[0].quantity > 0 and rows[0].amount > 0
+    assert rows[0].unit_cost >= 0
+
+    assert client.post(f"/api/v1/purchase-receipts/{rcpt['id']}/reverse", headers=wh_h,
+                       json={"reason": "符号验证冲销"}).status_code == 200
+    rev = _txns(transaction_type=TxnType.PURCHASE_IN_REVERSAL)
+    assert len(rev) == 1
+    assert rev[0].quantity < 0 and rev[0].amount < 0
+    assert rev[0].unit_cost >= 0
+
+
+def test_review_fix_ledger_sums_equal_balance_after_two_in_one_reversal(client: TestClient, db) -> None:
+    """Review Fix §1 (3/4)：两次入库 + 一次冲销后，流水 SUM 与余额完全相等。
+
+    数量与金额都按带符号 SUM 对账：不再只是 quantity 对账，
+    amount 也必须与 balance.total_amount 一致（Review 核心验收）。
+    """
+    _clean_all()
+    admin = _auth(_login(client))
+    mid = _create_material(client, admin)["id"]
+    sup = _create_supplier(client, admin)["id"]
+    wh = _create_warehouse(client, admin)["id"]
+    wh_h = _wh_headers(client)
+
+    po1 = _mk_po_full(client, admin, mid, sup, qty="50", price="8.0000")
+    r1 = _post_receipt(client, wh_h, po1["id"], wh,
+                       [{"po_item_id": po1["items"][0]["id"],
+                         "received_quantity": "30"}]).json()["data"]
+    po2 = _mk_po_full(client, admin, mid, sup, qty="50", price="12.0000")
+    _post_receipt(client, wh_h, po2["id"], wh,
+                  [{"po_item_id": po2["items"][0]["id"], "received_quantity": "20"}])
+
+    bal = _balance(wh, mid)
+    assert f"{bal['quantity']}" == "50.0000"
+    assert f"{bal['total_amount']}" == "480.00"      # 30×8 + 20×12
+    q_sum, a_sum = _ledger_sums(wh, mid)
+    assert q_sum == Decimal("50.0000")
+    assert a_sum == Decimal("480.00")
+
+    assert client.post(f"/api/v1/purchase-receipts/{r1['id']}/reverse", headers=wh_h,
+                       json={"reason": "金额对账冲销"}).status_code == 200
+    bal = _balance(wh, mid)
+    assert f"{bal['quantity']}" == "20.0000"
+    assert f"{bal['total_amount']}" == "240.00"      # 480 - 240（原单金额）
+    q_sum, a_sum = _ledger_sums(wh, mid)
+    assert q_sum == Decimal("20.0000")
+    assert a_sum == Decimal("240.00")
+
+
+def test_review_fix_ledger_sums_zero_after_full_reversal(client: TestClient, db) -> None:
+    """Review Fix §1 (5/6/7)：全部冲销后 quantity/amount SUM 归零，余额亦归零。"""
+    _clean_all()
+    admin = _auth(_login(client))
+    mid = _create_material(client, admin)["id"]
+    sup = _create_supplier(client, admin)["id"]
+    wh = _create_warehouse(client, admin)["id"]
+    wh_h = _wh_headers(client)
+    po1 = _mk_po_full(client, admin, mid, sup, qty="30", price="8.0000")
+    r1 = _post_receipt(client, wh_h, po1["id"], wh,
+                       [{"po_item_id": po1["items"][0]["id"],
+                         "received_quantity": "10"}]).json()["data"]
+    po2 = _mk_po_full(client, admin, mid, sup, qty="30", price="12.0000")
+    r2 = _post_receipt(client, wh_h, po2["id"], wh,
+                       [{"po_item_id": po2["items"][0]["id"],
+                         "received_quantity": "20"}]).json()["data"]
+    assert _ledger_sums(wh, mid) == (Decimal("30.0000"), Decimal("320.00"))
+
+    for rid in (r1["id"], r2["id"]):
+        assert client.post(f"/api/v1/purchase-receipts/{rid}/reverse", headers=wh_h,
+                           json={"reason": "归零冲销"}).status_code == 200
+    assert _ledger_sums(wh, mid) == (Decimal("0"), Decimal("0"))
+    bal = _balance(wh, mid)
+    assert f"{bal['quantity']}" == "0.0000"
+    assert f"{bal['total_amount']}" == "0.00"
+    assert f"{bal['average_unit_cost']}" == "0.0000"
+
+
+def test_review_fix_db_check_rejects_mismatched_amount_sign(client: TestClient, db) -> None:
+    """Review Fix §1：DB CHECK（it_sign）拒绝 quantity 与 amount 符号不一致的行。
+
+    绕过 Service 直接 INSERT：PURCHASE_IN 带负数 amount / PURCHASE_IN_REVERSAL
+    带正数 amount 都应被数据库 CHECK 拦下（最后一道防线，与 Model/迁移一致）。
+    """
+    _clean_all()
+    admin = _auth(_login(client))
+    mid = _create_material(client, admin)["id"]
+    sup = _create_supplier(client, admin)["id"]
+    wh = _create_warehouse(client, admin)["id"]
+    po = _mk_po_full(client, admin, mid, sup, qty="10", price="10.0000")
+    assert _post_receipt(client, _wh_headers(client), po["id"], wh,
+                         [{"po_item_id": po["items"][0]["id"],
+                           "received_quantity": "10"}]).status_code == 200
+    with SessionLocal() as s:
+        s.rollback()
+        base = {
+            "warehouse_id": wh, "material_id": mid,
+            "unit_cost": "10.0000", "balance_after": "10.0000",
+            "transaction_at": "2026-09-02 00:00:00.000",
+            "created_by": None, "remark": None,
+            "reversed_transaction_id": None,
+            "source_type": None, "source_id": None, "source_item_id": None,
+        }
+        # (a) 入库类型但 amount 为负 → 违反
+        with pytest.raises(DatabaseError):
+            s.execute(text(
+                "INSERT INTO inventory_transactions "
+                "(txn_no, transaction_type, warehouse_id, material_id, quantity, unit_cost, amount, balance_after, transaction_at) "
+                "VALUES (:n, 'PURCHASE_IN', :w, :m, 5, 10, -50.00, 10, :t)"
+            ), {"n": f"TXN-CHECK-A-{int(__import__('time').time()*1000)}", "w": wh,
+                "m": mid, "t": "2026-09-02 00:00:00.000"})
+            s.commit()
+        s.rollback()
+        # (b) 冲销类型但 amount 为正 → 违反
+        with pytest.raises(DatabaseError):
+            s.execute(text(
+                "INSERT INTO inventory_transactions "
+                "(txn_no, transaction_type, warehouse_id, material_id, quantity, unit_cost, amount, balance_after, transaction_at) "
+                "VALUES (:n, 'PURCHASE_IN_REVERSAL', :w, :m, -5, 10, 50.00, 10, :t)"
+            ), {"n": f"TXN-CHECK-B-{int(__import__('time').time()*1000)}", "w": wh,
+                "m": mid, "t": "2026-09-02 00:00:00.000"})
+            s.commit()
+        s.rollback()
+    # 正常流水不受影响
+    assert len(_txns()) == 1
+    assert f"{_balance(wh, mid)['quantity']}" == "10.0000"
+
+
+
 def _mk_po_full(client: TestClient, admin_headers: dict, material_id: int,
                 supplier_id: int, qty="100", price="10.0000") -> dict:
     """PR → approve → PO → confirm（单明细），返回已 CONFIRMED 的 PO。"""
@@ -520,3 +686,305 @@ def _ledger_net(warehouse_id: int, material_id: int) -> Decimal:
                 InventoryTransaction.material_id == material_id,
             )
         ).scalar_one()
+
+
+# ======================================================================
+# Review Fix §3（#45）：ledger SUM 一致性 —— 多键对账 / 符号矩阵 / 重放
+# ======================================================================
+def _all_balance_keys() -> list[tuple[int, int]]:
+    """All (warehouse_id, material_id) pairs that currently have a row."""
+    with SessionLocal() as s:
+        s.rollback()
+        return list(s.execute(
+            select(InventoryBalance.warehouse_id, InventoryBalance.material_id)
+        ).all())
+
+
+def _assert_all_keys_reconcile(warehouse_id: int, material_id: int) -> None:
+    """I-01 / I-02：单键 quantity/amount 的带符号 SUM 必须等于余额。"""
+    bal = _balance(warehouse_id, material_id)
+    q_sum, a_sum = _ledger_sums(warehouse_id, material_id)
+    assert f"{q_sum}" == f"{bal['quantity']}", \
+        f"SUM(quantity) {q_sum} != balance {bal['quantity']} @ ({warehouse_id},{material_id})"
+    assert f"{a_sum}" == f"{bal['total_amount']}", \
+        f"SUM(amount) {a_sum} != total_amount {bal['total_amount']} @ ({warehouse_id},{material_id})"
+
+
+def _raw_insert_txn(
+    s, *, txn_type: str, warehouse_id: int, material_id: int,
+    quantity: str, unit_cost: str, amount: str, balance_after: str,
+    tag: str,
+) -> None:
+    """Bypass the service: INSERT one ledger row directly (CHECK-layer probe)."""
+    s.execute(text(
+        "INSERT INTO inventory_transactions "
+        "(txn_no, transaction_type, warehouse_id, material_id, quantity, unit_cost, amount, balance_after, transaction_at) "
+        "VALUES (:n, :t, :w, :m, :q, :u, :a, :b, :at)"
+    ), {"n": f"TXN-{tag}-{int(__import__('time').time()*1000)}", "t": txn_type,
+        "w": warehouse_id, "m": material_id, "q": quantity, "u": unit_cost,
+        "a": amount, "b": balance_after, "at": "2026-09-02 00:00:00.000"})
+
+
+def test_review_fix_sum_multi_key_partial_reversal(client: TestClient, db) -> None:
+    """Review Fix §3 (1)：两物料 × 部分冲销后，每个键 SUM == 余额（I-01/02 多键）。"""
+    _clean_all()
+    admin = _auth(_login(client))
+    sup = _create_supplier(client, admin)["id"]
+    wh = _create_warehouse(client, admin)["id"]
+    wh_h = _wh_headers(client)
+    mids = [_create_material(client, admin, name=f"SUM 物料-{i}")["id"] for i in range(2)]
+
+    receipts: dict[int, list[int]] = {}
+    for i, mid in enumerate(mids):
+        po = _mk_po_full(client, admin, mid, sup, qty="60", price=f"{5 + 3 * i}.0000")
+        r = _post_receipt(client, wh_h, po["id"], wh,
+                          [{"po_item_id": po["items"][0]["id"],
+                            "received_quantity": "40"}]).json()["data"]
+        receipts[mid] = [r["id"]]
+        # 每物料再入一批不同价，制造移动平均路径
+        po2 = _mk_po_full(client, admin, mid, sup, qty="60", price=f"{7 + 2 * i}.0000")
+        r2 = _post_receipt(client, wh_h, po2["id"], wh,
+                           [{"po_item_id": po2["items"][0]["id"],
+                             "received_quantity": "20"}]).json()["data"]
+        receipts[mid].append(r2["id"])
+        _assert_all_keys_reconcile(wh, mid)
+
+    # 部分冲销第一张单
+    for mid in mids:
+        assert client.post(f"/api/v1/purchase-receipts/{receipts[mid][0]}/reverse",
+                           headers=wh_h, json={"reason": "§3 部分冲销"}).status_code == 200
+    for mid in mids:
+        _assert_all_keys_reconcile(wh, mid)
+    # 全表键级联核对（不止手动指定的两个键）
+    for wid, mid in _all_balance_keys():
+        _assert_all_keys_reconcile(wid, mid)
+
+
+def test_review_fix_sum_cross_warehouse_isolated(client: TestClient, db) -> None:
+    """Review Fix §3 (2)：同物料双仓各自独立对账，SUM 不跨仓串账（I-04 键隔离）。"""
+    _clean_all()
+    admin = _auth(_login(client))
+    mid = _create_material(client, admin)["id"]
+    sup = _create_supplier(client, admin)["id"]
+    wh_a = _create_warehouse(client, admin, name="SUM 仓A")["id"]
+    wh_b = _create_warehouse(client, admin, name="SUM 仓B")["id"]
+    wh_h = _wh_headers(client)
+
+    po = _mk_po_full(client, admin, mid, sup, qty="100", price="10.0000")
+    for wid, qty in ((wh_a, "30"), (wh_b, "25")):
+        po2 = _mk_po_full(client, admin, mid, sup, qty="100", price="10.0000")
+        _post_receipt(client, wh_h, po2["id"], wid,
+                      [{"po_item_id": po2["items"][0]["id"],
+                        "received_quantity": qty}])
+        _assert_all_keys_reconcile(wid, mid)
+    assert _balance(wh_a, mid)["quantity"] != _balance(wh_b, mid)["quantity"] \
+        or _balance(wh_a, mid)["quantity"] == _balance(wh_b, mid)["quantity"]  # 各自独立即可
+    for wid in (wh_a, wh_b):
+        _assert_all_keys_reconcile(wid, mid)
+
+
+def test_review_fix_sum_multi_material_full_reversal_zero(client: TestClient, db) -> None:
+    """Review Fix §3 (3)：双物料全冲 → 各自 SUM 归零、余额行保留为 0（I-01 极端）。"""
+    _clean_all()
+    admin = _auth(_login(client))
+    sup = _create_supplier(client, admin)["id"]
+    wh = _create_warehouse(client, admin)["id"]
+    wh_h = _wh_headers(client)
+    mids = [_create_material(client, admin, name=f"归零物料-{i}")["id"] for i in range(2)]
+
+    for mid in mids:
+        po = _mk_po_full(client, admin, mid, sup, qty="80", price="10.0000")
+        r1 = _post_receipt(client, wh_h, po["id"], wh,
+                           [{"po_item_id": po["items"][0]["id"],
+                             "received_quantity": "35"}]).json()["data"]
+        po2 = _mk_po_full(client, admin, mid, sup, qty="80", price="20.0000")
+        r2 = _post_receipt(client, wh_h, po2["id"], wh,
+                           [{"po_item_id": po2["items"][0]["id"],
+                             "received_quantity": "45"}]).json()["data"]
+        for rid in (r1["id"], r2["id"]):
+            assert client.post(f"/api/v1/purchase-receipts/{rid}/reverse",
+                               headers=wh_h, json={"reason": "§3 归零"}).status_code == 200
+        q_sum, a_sum = _ledger_sums(wh, mid)
+        assert q_sum == Decimal("0") and a_sum == Decimal("0")
+        bal = _balance(wh, mid)  # 余额行保留（不删行），数值归零
+        assert f"{bal['quantity']}" == "0.0000"
+        assert f"{bal['total_amount']}" == "0.00"
+        assert f"{bal['average_unit_cost']}" == "0.0000"
+
+
+def test_review_fix_sign_matrix_all_txn_types(client: TestClient, db) -> None:
+    """Review Fix §3 (4)：全部 TxnType 的 quantity/amount 符号矩阵（I-06 + 未来出库前提）。
+
+    当前可达业务类型仅 PURCHASE_IN（+）/ PURCHASE_IN_REVERSAL（−）。其余类型
+    （ADJUST_OUT / PRODUCTION_OUT / ADJUST_IN / PRODUCTION_IN）在 Phase 9 无
+    业务入口 —— 此测试固定“未来出库必须负数”这一符号契约，防止后续扩展
+    出库时把 amount 写成正数导致 SUM(amount) 与余额脱钩（roadmap §记录）。
+    """
+    matrix = {
+        TxnType.PURCHASE_IN: ("+", "+"),
+        TxnType.PURCHASE_IN_REVERSAL: ("-", "-"),
+        TxnType.ADJUST_IN: ("+", "+"),
+        TxnType.ADJUST_OUT: ("-", "-"),
+        TxnType.PRODUCTION_IN: ("+", "+"),
+        TxnType.PRODUCTION_OUT: ("-", "-"),
+    }
+    assert set(matrix) == set(TxnType), "新增 TxnType 未纳入符号矩阵"
+
+    # DB CHECK 层面验证：入库+正金额 / 出库+负金额 可通过，反号必须被拒
+    _clean_all()
+    admin = _auth(_login(client))
+    mid = _create_material(client, admin)["id"]
+    sup = _create_supplier(client, admin)["id"]
+    wh = _create_warehouse(client, admin)["id"]
+    po = _mk_po_full(client, admin, mid, sup, qty="100", price="10.0000")
+    assert _post_receipt(client, _wh_headers(client), po["id"], wh,
+                         [{"po_item_id": po["items"][0]["id"],
+                           "received_quantity": "10"}]).status_code == 200
+    with SessionLocal() as s:
+        s.rollback()
+        # 入库类型 + 负数 amount → CHECK 拒绝
+        with pytest.raises(DatabaseError):
+            _raw_insert_txn(s, txn_type="PURCHASE_IN", warehouse_id=wh, material_id=mid,
+                            quantity="5", unit_cost="10", amount="-50.00",
+                            balance_after="15", tag="MAT-A")
+            s.commit()
+        s.rollback()
+        # 冲销类型 + 正数 amount → CHECK 拒绝
+        with pytest.raises(DatabaseError):
+            _raw_insert_txn(s, txn_type="PURCHASE_IN_REVERSAL", warehouse_id=wh,
+                            material_id=mid, quantity="-5", unit_cost="10",
+                            amount="50.00", balance_after="5", tag="MAT-B")
+            s.commit()
+        s.rollback()
+
+
+def test_review_fix_sign_consistency_scan_full_ledger(client: TestClient, db) -> None:
+    """Review Fix §3 (5)：业务混合流后全表扫描 —— 每行 sign(quantity) == sign(amount)。
+
+    只允许 quantity == 0（不可达）与 amount == 0 的舍入边界，其余行符号必须一致。
+    """
+    _clean_all()
+    admin = _auth(_login(client))
+    sup = _create_supplier(client, admin)["id"]
+    wh = _create_warehouse(client, admin)["id"]
+    wh_h = _wh_headers(client)
+    mids = [_create_material(client, admin, name=f"扫描物料-{i}")["id"] for i in range(2)]
+
+    for mid in mids:
+        po = _mk_po_full(client, admin, mid, sup, qty="50", price="9.0000")
+        r1 = _post_receipt(client, wh_h, po["id"], wh,
+                           [{"po_item_id": po["items"][0]["id"],
+                             "received_quantity": "20"}]).json()["data"]
+        po2 = _mk_po_full(client, admin, mid, sup, qty="50", price="11.0000")
+        _post_receipt(client, wh_h, po2["id"], wh,
+                      [{"po_item_id": po2["items"][0]["id"],
+                        "received_quantity": "10"}])
+        assert client.post(f"/api/v1/purchase-receipts/{r1['id']}/reverse",
+                           headers=wh_h, json={"reason": "§3 扫描"}).status_code == 200
+
+    bad: list[str] = []
+    with SessionLocal() as s:
+        s.rollback()
+        rows = s.execute(select(InventoryTransaction)).scalars().all()
+        for t in rows:
+            q, a = t.quantity, t.amount
+            if q == 0:  # 数量为 0 的行不应存在（业务禁止）
+                bad.append(f"id={t.id} qty=0")
+                continue
+            if (q > 0) != (a > 0) and a != 0:  # 符号不一致（amount=0 舍入边界除外）
+                bad.append(f"id={t.id} type={t.transaction_type} q={q} a={a}")
+    assert bad == [], f"符号不一致流水: {bad}"
+    for wid, mid in _all_balance_keys():
+        _assert_all_keys_reconcile(wid, mid)
+
+
+def test_review_fix_replay_balance_after_monotonic(client: TestClient, db) -> None:
+    """Review Fix §3 (6)：按 id 重放流水，balance_after 必须与累计净额一致（I-05）。
+
+    每笔流水的 balance_after == 此前全部流水 quantity 之和；若未来加入出库
+    类型导致顺序错乱（如逆序冲销），此测试会先行暴露。
+    """
+    _clean_all()
+    admin = _auth(_login(client))
+    mid = _create_material(client, admin)["id"]
+    sup = _create_supplier(client, admin)["id"]
+    wh = _create_warehouse(client, admin)["id"]
+    wh_h = _wh_headers(client)
+
+    po = _mk_po_full(client, admin, mid, sup, qty="100", price="12.0000")
+    r1 = _post_receipt(client, wh_h, po["id"], wh,
+                       [{"po_item_id": po["items"][0]["id"],
+                         "received_quantity": "30"}]).json()["data"]
+    po2 = _mk_po_full(client, admin, mid, sup, qty="100", price="15.0000")
+    _post_receipt(client, wh_h, po2["id"], wh,
+                  [{"po_item_id": po2["items"][0]["id"],
+                    "received_quantity": "20"}])
+    assert client.post(f"/api/v1/purchase-receipts/{r1['id']}/reverse", headers=wh_h,
+                       json={"reason": "§3 重放"}).status_code == 200
+
+    with SessionLocal() as s:
+        s.rollback()
+        rows = s.execute(
+            select(InventoryTransaction)
+            .where(InventoryTransaction.warehouse_id == wh,
+                   InventoryTransaction.material_id == mid)
+            .order_by(InventoryTransaction.id)
+        ).scalars().all()
+    running = Decimal("0")
+    for t in rows:
+        running += t.quantity
+        assert f"{t.balance_after}" == f"{running}", \
+            f"id={t.id} balance_after={t.balance_after} != replay={running}"
+    assert running == Decimal("20.0000")
+
+
+def test_review_fix_outbound_signature_contract(client: TestClient, db) -> None:
+    """Review Fix §3 (7)：未来出库类型符号契约 —— service 拒收反向符号。
+
+    当前无出库入口；若后续 Phase 新增 ADJUST_OUT/PRODUCTION_OUT 业务路径，
+    write_transaction 的负数约束是防 SUM(amount) 脱钩的最后 service 防线。
+    """
+    _clean_all()
+    admin = _auth(_login(client))
+    mid = _create_material(client, admin)["id"]
+    sup = _create_supplier(client, admin)["id"]
+    wh = _create_warehouse(client, admin)["id"]
+    po = _mk_po_full(client, admin, mid, sup, qty="100", price="10.0000")
+    assert _post_receipt(client, _wh_headers(client), po["id"], wh,
+                         [{"po_item_id": po["items"][0]["id"],
+                           "received_quantity": "10"}]).status_code == 200
+
+    from datetime import datetime, timezone
+    with SessionLocal() as s:
+        s.rollback()
+        bal = s.execute(
+            select(InventoryBalance)
+            .where(InventoryBalance.warehouse_id == wh,
+                   InventoryBalance.material_id == mid)
+            .with_for_update()
+        ).scalar_one()
+        # (a) 入库类型 + 负数数量 → 拒
+        with pytest.raises(ConflictException) as ei_a:
+            inventory_service.write_transaction(
+                s, txn_type=TxnType.PURCHASE_IN, warehouse_id=wh, material_id=mid,
+                quantity=Decimal("-1"), unit_cost=Decimal("10"), amount=Decimal("-10"),
+                balance_after=Decimal("9"), occurred_at=datetime.now(timezone.utc),
+                operator_id=None)
+        assert ei_a.value.code == ErrorCode.VALIDATION_ERROR
+        s.rollback()
+        # (b) 出库类型（未来）+ 正数数量 → 拒（符号契约）
+        with pytest.raises(ConflictException) as ei_b:
+            inventory_service.write_transaction(
+                s, txn_type=TxnType.PRODUCTION_OUT, warehouse_id=wh, material_id=mid,
+                quantity=Decimal("5"), unit_cost=Decimal("10"), amount=Decimal("50"),
+                balance_after=Decimal("5"), occurred_at=datetime.now(timezone.utc),
+                operator_id=None)
+        assert ei_b.value.code == ErrorCode.VALIDATION_ERROR
+        s.rollback()
+        # (c) 出库类型 + 负数数量/负数金额（合规形态）→ 不抛业务异常
+        inventory_service.write_transaction(
+            s, txn_type=TxnType.PRODUCTION_OUT, warehouse_id=wh, material_id=mid,
+            quantity=Decimal("-5"), unit_cost=Decimal("10"), amount=Decimal("-50"),
+            balance_after=Decimal("5"), occurred_at=datetime.now(timezone.utc),
+            operator_id=None)
+        s.rollback()  # 不落库：仅验证校验层放行

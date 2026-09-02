@@ -191,6 +191,10 @@ class InventoryTransaction(PKMixin, Base):
     """库存流水（§5.4，append-only ledger，架构规则 3）
 
     - quantity 带符号：入库为正、出库为负；CHECK 强制类型与符号一致
+    - amount 与 quantity 同符号（Review Fix §1）：PURCHASE_IN 的
+      quantity/amount 均 > 0，PURCHASE_IN_REVERSAL 均 < 0 —— 因此
+      SUM(quantity) == balance.quantity 且 SUM(amount) == balance.total_amount
+    - unit_cost 恒 >= 0（成本单价不是带符号量）
     - 创建后禁止 UPDATE / DELETE（MySQL 触发器强制，迁移中创建）
     - 错误通过反向流水（PURCHASE_IN_REVERSAL）纠正，原始记录保留
     """
@@ -204,9 +208,14 @@ class InventoryTransaction(PKMixin, Base):
         Index("ix_it_type", "transaction_type"),
         Index("ix_it_time", "transaction_at"),
         Index("ix_it_reversed", "reversed_transaction_id"),
+        # amount 与 quantity 同号：入库正、出库/冲销负（含 0 边界，杜绝
+        # 极小 qty×unit_cost 舍入为 0.00 的合法行被误拒 —— 业务上正常
+        # 入库 amount 必为正、冲销必为负，见 Review Fix §1 文档）
         CheckConstraint(
-            "(transaction_type IN ('PURCHASE_IN','ADJUST_IN','PRODUCTION_IN') AND quantity > 0)"
-            " OR (transaction_type IN ('PURCHASE_IN_REVERSAL','ADJUST_OUT','PRODUCTION_OUT') AND quantity < 0)",
+            "(transaction_type IN ('PURCHASE_IN','ADJUST_IN','PRODUCTION_IN')"
+            " AND quantity > 0 AND amount >= 0)"
+            " OR (transaction_type IN ('PURCHASE_IN_REVERSAL','ADJUST_OUT','PRODUCTION_OUT')"
+            " AND quantity < 0 AND amount <= 0)",
             name="it_sign",
         ),
         CheckConstraint("unit_cost >= 0", name="it_cost_nonneg"),

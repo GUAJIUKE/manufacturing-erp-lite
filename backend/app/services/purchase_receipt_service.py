@@ -22,9 +22,15 @@ Concurrency (§八 / §十四)
   over-receive.
 * Balance: ``INSERT ... ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id)``
   followed by ``SELECT ... FOR UPDATE`` (see :mod:`app.services.inventory_service`).
-* Lock order (§十五): balance keys are locked sorted by
-  ``(warehouse_id, material_id)``; PO lines are CAS-updated sorted by
-  ``po_item_id``. Both orders are global, so two receipts touching the same
+* Lock order (Review Fix §2): **all** balance locks are taken first, in one
+  pre-sorted pass over ``(warehouse_id, material_id)`` ascending via
+  ``inventory_service.lock_balances`` — in ``create_receipt`` they precede
+  even the receipt-header insert (whose FK checks take shared locks on the
+  PO / warehouse rows), so balance locks are the first row locks of the
+  transaction. PO lines are CAS-updated sorted by ``po_item_id``. Only
+  ``reverse_receipt`` deviates: it first claims its *own* receipt row
+  atomically (status flip, §二十一), then locks balances in the same
+  canonical order. Every order is global, so two receipts touching the same
   parts can never deadlock by locking in opposite order.
 
 Reversal (§十八 / §十九)
@@ -251,6 +257,22 @@ def create_receipt(
     now = datetime.now(timezone.utc)
     received_at = datetime.combine(receipt_date, now.time())
 
+    # --- 锁顺序（Review Fix §2）：余额锁必须是本事务的第一组行锁 -------
+    # 全量去重 + (warehouse_id, material_id) 升序一次性取齐（lock_balances
+    # 内部保证）。若先插入单头再锁余额，单头 INSERT 的 FK 检查会对 PO /
+    # 仓库行加 S 锁并持有到 COMMIT——两个并发入库同一 PO 时可能形成
+    # "create 持 S(PO) 等余额 / 对方持余额等重算所需 X(PO)" 的交叉等待
+    # （InnoDB 死锁）。余额锁前置后，事务内后续所有行锁（单头 FK S 锁、
+    # PO 行 CAS、序列行）都排在统一的有序余额锁之后，交叉等待不复存在。
+    keys, locks = inventory_service.lock_balances(
+        db,
+        [(warehouse.id, poi.material_id) for poi in po_items.values()],
+    )
+    running_qty: dict[tuple[int, int], Decimal] = {k: locks[k].quantity for k in keys}
+    agg: dict[tuple[int, int], inventory_service.BalanceDelta] = {
+        k: inventory_service.BalanceDelta() for k in keys
+    }
+
     receipt_no = numbering_service.next_daily_code(
         db, SequenceKey.PURCHASE_RECEIPT, "RCV", receipt_date
     )
@@ -265,16 +287,6 @@ def create_receipt(
     )
     db.add(receipt)
     db.flush()
-
-    # --- 锁顺序（§十五）：按 (warehouse_id, material_id) 升序锁定余额 ---
-    keys = inventory_service.sort_keys(
-        [(warehouse.id, poi.material_id) for poi in po_items.values()]
-    )
-    locks = {k: inventory_service.lock_balance(db, *k) for k in keys}
-    running_qty: dict[tuple[int, int], Decimal] = {k: locks[k].quantity for k in keys}
-    agg: dict[tuple[int, int], inventory_service.BalanceDelta] = {
-        k: inventory_service.BalanceDelta() for k in keys
-    }
 
     # --- 逐明细：PO CAS → 入库明细 → 库存流水（po_item_id 升序） -------
     for line_no, item in enumerate(sorted(data.items, key=lambda x: x.po_item_id), start=1):
@@ -432,11 +444,12 @@ def reverse_receipt(
     po = db.get(PurchaseOrder, receipt.po_id)
     items = sorted(receipt.items, key=lambda x: x.po_item_id)
 
-    # 余额锁同样按 (warehouse_id, material_id) 升序（§十五）
-    keys = inventory_service.sort_keys(
-        [(receipt.warehouse_id, ri.material_id) for ri in items]
+    # 余额锁：与入库同序，全量去重 + (warehouse_id, material_id) 升序
+    # 一次取齐（Review Fix §2，lock_balances 统一入口）。
+    keys, locks = inventory_service.lock_balances(
+        db,
+        [(receipt.warehouse_id, ri.material_id) for ri in items],
     )
-    locks = {k: inventory_service.lock_balance(db, *k) for k in keys}
     running_qty: dict[tuple[int, int], Decimal] = {k: locks[k].quantity for k in keys}
     agg: dict[tuple[int, int], inventory_service.BalanceDelta] = {
         k: inventory_service.BalanceDelta() for k in keys

@@ -211,6 +211,16 @@
 
 **验收**（§三十四–§四十三 逐项）：正常入库校验链 15 项、部分收货 5 项、并发 5 项（超收 CAS / Balance 无 Lost Update / 并发首建单行 / 编号不重复）、余额 9 项（移动平均 10×10+10×20、安全库存 below、非零库存仓禁停用）、流水 8 项（含 append-only 405）、冲销 15 项（原始成本回退 400→300、归零 0/0/0、停用物料仍可冲、并发 reverse 单成功）、PO 状态回退 3 项、事务原子性 3 项（monkeypatch 中途抛异常 → 无半成功）、RBAC 矩阵、全链路集成（PR→审批→PO→收 40→PARTIALLY_RECEIVED→收 60→RECEIVED→冲第二张→PARTIALLY_RECEIVED→冲第一张→CONFIRMED、余额 0、全链 document_no 可追溯）→ `pytest` 187/187（138 旧 + 49 新）+ 冒烟 51/51 → 独立 commit `feat: implement purchase receipt and inventory`
 
+### Phase 9 Review Fix — 数据完整性审查修正（#42–#46）✅
+
+Review 发现 ledger `amount` 仅约束了 `quantity` 符号、`amount` 未纳入 CHECK 的缺口后，本轮完成 5 项修正（2026-09-02）：
+
+- **#42 signed amount 符号规则**：新增迁移 `2026_09_02_1300-e5f6a7b8c9d0` 将 `ck_inventory_transactions_it_sign` 收紧为 **`amount` 与 `quantity` 同号**（入库/调入为正、冲销/调出为负），service 层 `write_transaction` 同步拒绝反向符号（`VALIDATION_ERROR` 1001）；DB 层保留 0 仅允许舍入边界。测试 4 项：入库正/冲销负方向、(两入一冲) 带符号 SUM==余额、全冲 SUM 归零、DB CHECK 拦反号直插
+- **#43 余额锁全量预排序**：新增统一入口 `inventory_service.lock_balances(keys)`（先去重 → 按 `(warehouse_id, material_id)` 升序 → 统一 `INSERT..ON DUPLICATE KEY` 确保行存在 → 按序 `SELECT..FOR UPDATE`），`create_receipt`/`reverse_receipt` 全部改走该入口；余额锁前置为事务内**第一组**行锁（单头 FK 的 S 锁后置），消除"create 持 S(PO) 等余额 / 对方持余额等 X(PO)"交叉死锁。重构后 53/53 无回归
+- **#44 交叉双物料并发测试**：构造 PO_X 行序 [A,B] / PO_Y 行序 [B,A] 的交叉锁竞争，4 轮×2 单据并发全部 200，无 1213 死锁、无 Lost Update，余额与流水精确（quantity/amount 双向对账）
+- **#45 ledger SUM 一致性测试 + 边界文档**：7 项新测试覆盖多键对账（两物料×部分冲销、同物料双仓隔离、双物料全冲归零）、全 TxnType 符号矩阵（DB CHECK 层）、业务流后全表 `sign(quantity)==sign(amount)` 扫描、`balance_after` 按 id 重放单调验证、未来出库类型 service 符号契约 → 对应不变量 I-01/I-02/I-04/I-05/I-06
+- **Reversal 模型前提（边界文档）**：当前 ledger 仅存在 `PURCHASE_IN(+)/PURCHASE_IN_REVERSAL(−)` 两类**可达**流水。枚举虽预置 `ADJUST_IN/OUT`、`PRODUCTION_IN/OUT`（未来生产/调拨），但 Phase 9 无任何出库业务入口，`apply_outbound` 只有冲销路径复用。**未来新增出库时**：① 出库必须走 `_OUTBOUND_TYPES` 负数数量/金额（service 已强制）；② 冲销历史入库时若库存已被后续出库消耗，`apply_outbound` 的 `new_quantity < 0` → `INVENTORY_NEGATIVE`(6009) 拦截 —— 需要**可冲销数量检查**（按 `reversed_transaction_id` 追踪原单剩余可冲量）或引入**成本层（FIFO/批次）**才能支持"先出后冲"；③ `SUM(quantity)/SUM(amount)` 全表对账 SQL（§9 I-01/I-02）与 `_assert_all_keys_reconcile` 测试是守住符号契约的回归防线
+
 ### Phase 10 — 前端
 
 - Vite + Vue3 + TS + Element Plus 骨架
@@ -326,6 +336,7 @@ chore:    构建/配置/依赖
 | A-4 | `unit_price` DB CHECK `>= 0`，confirm 时校验 `> 0` | 允许 DRAFT 暂存 0 |
 | A-5 | Docker daemon 未启动 | 已给出本地 MySQL 备选方案 |
 | A-6 | 冲销为整单冲销，不支持部分冲销 | 第一阶段简化 |
+| A-7 | 未来出库（ADJUST_OUT/PRODUCTION_OUT/SALES_OUT 等）的冲销语义 | Phase 9 无出库入口，`apply_outbound` 仅被冲销复用；先出后冲需可冲销数量检查或成本层（见 Phase 9 Review Fix 边界文档） |
 
 ### 4.3 环境待办
 
