@@ -2,7 +2,7 @@
 
 **制造企业采购库存协同系统** — 面向小型研发制造企业的轻量级 ERP 系统。
 
-> 当前阶段：**Phase 9 采购入库与库存已完成**（Receipt 创建即 POSTED + RCV 编号、部分收货、CAS 并发防超收、Inventory Transaction append-only、Balance 移动加权平均、整单冲销 Reversal、PO 状态按 Items 推导、187 项测试 + 51 项冒烟通过）。下一步：Phase 10 前端，等待 Review。
+> 当前阶段：**Phase 10 前端已完成**（Vue 3 + TS + Element Plus 单页应用，真实 API 全业务链，无 mock；typecheck ✅ / build ✅ / vitest 32 项 ✅ / 真实 API E2E 37 项 ✅ / 后端回归保持全绿）。**等待 Review，未进入 Phase 11**。
 
 ---
 
@@ -25,14 +25,14 @@
 | 层 | 技术 |
 |---|---|
 | 后端 | Python 3.12 · FastAPI · SQLAlchemy 2.x · Pydantic v2 · MySQL 8 · Alembic · JWT · Pytest |
-| 前端 | Vue 3 · TypeScript · Vite · Element Plus · Pinia · Vue Router · Axios · ECharts |
+| 前端 | Vue 3 · TypeScript · Vite · Element Plus · Pinia · Vue Router · Axios · Vitest（ECharts 留待 Phase 11 Dashboard） |
 | 部署 | Docker · Docker Compose |
 
 ## 目录结构
 
 ```
 backend/                后端服务（分层：api / core / models / schemas / services / repositories / db / utils）
-frontend/               前端应用
+frontend/               前端应用（Vue 3：api / components / layouts / router / stores / types / utils / views）
 docs/                   项目文档
 docker-compose.yml      容器编排
 ```
@@ -53,7 +53,48 @@ docker-compose.yml      容器编排
 
 ## 快速开始
 
-> 待 Phase 13 完成后可用：`docker compose up -d`
+### 1. 启动后端（依赖本地 MySQL 8，库名 `erp_lite`）
+
+```bash
+cd backend
+./.venv/Scripts/python.exe -m alembic upgrade head   # 首次：建表（已执行可跳过）
+./.venv/Scripts/python.exe -m app.db.init_data       # 首次：RBAC + 演示账号（幂等）
+./.venv/Scripts/python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
+
+### 2. 启动前端
+
+```bash
+cd frontend
+npm install
+npm run dev          # http://localhost:5173（/api 代理到 127.0.0.1:8000）
+```
+
+后端地址通过 `frontend/.env.development` 的 `VITE_API_BASE_URL` 配置（默认 `http://localhost:8000/api/v1`）。
+
+### 3. 演示账号
+
+| 账号 | 密码 | 角色 | 典型操作 |
+|---|---|---|---|
+| admin | admin123 | 系统管理员 | 主数据 / 系统管理 |
+| zhangsan | demo123 | 采购申请人 | 创建并提交 PR |
+| lisi | demo123 | 部门主管 | 审批中心（通过/驳回） |
+| wangwu | demo123 | 采购员 | 由 PR 创建 PO 并确认 |
+| zhaoliu | demo123 | 仓库管理员 | 收货入库 / 冲销 / 库存查询 |
+
+### 4. 完整演示流程（全程浏览器，不碰 Swagger/DB/脚本）
+
+```
+zhangsan 登录 → 新建采购申请(PR) → 提交
+lisi 登录 → 审批中心 → 通过
+wangwu 登录 → 创建采购订单(PO，带 PR 来源) → 确认
+zhaoliu 登录 → 采购入库：第一次收 40 → 库存 40 → 第二次收 60 → PO 已收完
+             → 库存余额 100（安全库存红/低库存标记）→ 库存流水 +40/+60
+             → 入库单详情 → 冲销第二批（填写原因）→ 库存回退 40 → 流水 +40/+60/-60
+admin 登录 → 系统管理（用户/角色权限分配/部门）
+```
+
+每次切换账号请先退出登录（右上角用户菜单），登录页可点击演示账号卡片快速填充。
 
 ## 开发进度
 
@@ -68,7 +109,8 @@ docker-compose.yml      容器编排
 | 7 | 审批工作流（部门主管审批 + 审批记录 + 并发保护） | ✅ 完成 |
 | 8 | 采购订单（PR→PO 转换 + 确认/取消 + 数量一致性） | ✅ 完成 |
 | 9 | 采购入库 + 库存（Receipt/Transaction/Balance/冲销） | ✅ 完成 |
-| 10–11 | 前端与 Dashboard | ⬜ 未开始 |
+| 10 | 前端（Vue 3 + TS + Element Plus，真实 API 全业务链 10.1–10.10） | ✅ 完成 |
+| 11 | Dashboard 与图表（待 Review 通过后） | ⬜ 未开始 |
 | 12–14 | 测试、部署、文档 | ⬜ 未开始 |
 
 ## 设计要点
