@@ -25,21 +25,12 @@ from datetime import date
 from decimal import Decimal
 
 from fastapi.testclient import TestClient
-from sqlalchemy import delete, select
+from sqlalchemy import select
 
 from app.db.session import SessionLocal
-from app.models import (
-    ApprovalRecord,
-    OperationLog,
-    PurchaseOrder,
-    PurchaseOrderItem,
-    PurchaseOrderItemSource,
-    PurchaseRequisition,
-    PurchaseRequisitionItem,
-    Role,
-    User,
-)
-from app.utils.enums import AuditAction, PoStatus, PrStatus, RoleCode
+from app.models import OperationLog, PurchaseOrderItem, Role, User
+from app.utils.enums import RoleCode
+from cleanup_helper import wipe_chain
 
 
 # ----------------------------------------------------------------------
@@ -56,15 +47,11 @@ def _auth(token: str) -> dict[str, str]:
 
 
 def _clean_po_data() -> None:
-    """Wipe PO + sources + PR + approval records (FK order matters).
-    Never touches number_sequences — daily PO/PR counters are monotonic."""
+    """Wipe PO + sources + PR + approval records + receipts + ledger.
+    Never touches number_sequences — daily PO/PR counters are monotonic.
+    FK order: receipts/ledger (Phase 9) → PO sources → PO items → PO → PR."""
     with SessionLocal() as s:
-        s.execute(delete(PurchaseOrderItemSource))
-        s.execute(delete(PurchaseOrderItem))
-        s.execute(delete(PurchaseOrder))
-        s.execute(delete(ApprovalRecord))
-        s.execute(delete(PurchaseRequisitionItem))
-        s.execute(delete(PurchaseRequisition))
+        wipe_chain(s, with_balances=False)
         s.commit()
 
 

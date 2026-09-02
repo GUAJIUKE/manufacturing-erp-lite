@@ -177,8 +177,8 @@ class SequenceKey(StrEnum):
     WAREHOUSE = "WH"
     PURCHASE_REQUISITION = "PR"
     PURCHASE_ORDER = "PO"
-    PURCHASE_RECEIPT = "REC"
-    INVENTORY_TRANSACTION = "TXN"
+    PURCHASE_RECEIPT = "RCV"     # RCV-20260901-0001（Phase 9 §三）
+    INVENTORY_TRANSACTION = "TXN"  # TXN-20260901-000001
 
 
 #: Keys whose sequence never resets (global counter instead of a daily one).

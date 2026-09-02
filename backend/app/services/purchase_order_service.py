@@ -187,6 +187,28 @@ def _visible_source_stmt(cond) -> select:
     )
 
 
+def visible_po_id_stmt(db: Session, user: CurrentUser):
+    """当前用户可见的 PO id 子查询；``None`` 表示全量可见（Phase 9 §二十七）。
+
+    供入库单的对象级可见性复用（入库单 → PO → PR 链路），避免重复实现
+    同一套范围规则。BUYER 在 PO 域属于全量角色，入库域另有「仅自己订单」
+    的范围，由调用方单独处理。
+    """
+    if user.role_code in _FULL_SCOPE_ROLES:
+        return None
+    if user.role_code == RoleCode.APPLICANT.value:
+        cond = PurchaseRequisition.applicant_id == user.id
+    elif user.role_code == RoleCode.DEPT_MANAGER.value:
+        managed = db.execute(
+            select(DepartmentManager.dept_id).where(DepartmentManager.user_id == user.id)
+        ).scalars().all()
+        cond = PurchaseRequisition.department_id.in_(managed)
+    else:
+        # 未知角色：默认不可见
+        return select(PurchaseOrder.id).where(False)
+    return _visible_source_stmt(cond)
+
+
 def _assert_visible(db: Session, po: PurchaseOrder, user: CurrentUser) -> None:
     """对象级读取门（Phase 8 §四）：APPLICANT/DEPT_MANAGER 仅可见自己链路
     的 PO；其余角色全量。不可见一律 403（不泄漏存在性）。"""

@@ -36,7 +36,7 @@ class NumberSequence(PKMixin, Base):
     __tablename__ = "number_sequences"
     __table_args__ = (UniqueConstraint("sequence_key", "sequence_date", name="uk_seq"),)
 
-    sequence_key: Mapped[str] = mapped_column(String(32), nullable=False, comment="PR/PO/REC/TXN/MAT/SUP/WH")
+    sequence_key: Mapped[str] = mapped_column(String(32), nullable=False, comment="PR/PO/RCV/TXN/MAT/SUP/WH")
     sequence_date: Mapped[date] = mapped_column(
         Date, nullable=False, comment="按日重置用业务日期；全局递增固定 1970-01-01"
     )

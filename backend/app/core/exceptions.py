@@ -102,6 +102,8 @@ class ErrorCode(IntEnum):
     INVENTORY_NEGATIVE = 6009
     INVENTORY_BALANCE_MISMATCH = 6010
     INVENTORY_TXN_APPEND_ONLY = 6011
+    # Phase 9: 入库明细归属校验
+    RECEIPT_ITEM_NOT_IN_PO = 6012  # po_item 不属于指定 PO（§五.10）
 
 
 class AppException(Exception):

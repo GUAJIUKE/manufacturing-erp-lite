@@ -11,24 +11,16 @@ from __future__ import annotations
 
 import re
 import threading
-from datetime import date, datetime
+from datetime import date
 from decimal import Decimal
 
 from fastapi.testclient import TestClient
-from sqlalchemy import delete, select
+from sqlalchemy import select
 
 from app.db.session import SessionLocal
-from app.models import (
-    Department,
-    OperationLog,
-    PurchaseOrder,
-    PurchaseOrderItem,
-    PurchaseOrderItemSource,
-    PurchaseRequisition,
-    PurchaseRequisitionItem,
-    User,
-)
+from app.models import OperationLog, PurchaseRequisition, User
 from app.utils.enums import AuditAction
+from cleanup_helper import wipe_chain
 
 PR_NO_RE = re.compile(r"^PR-\d{8}-\d{4}$")
 
@@ -50,14 +42,12 @@ def _clean_prs() -> None:
     PR (and any leftover PO) tables before each test so runs are repeatable
     (never touch number_sequences — daily PR counters are monotonic,
     Phase 5 lesson). PO tables first: sources FK (RESTRICT) blocks PR item
-    deletion, Phase 8."""
+    deletion, Phase 8. Receipt + ledger rows first of all: Phase 9 added
+    ``purchase_receipt_items.fk_ri_poi`` (RESTRICT) on PO items, so any
+    receipt left behind by a Phase 9 test blocks the whole wipe."""
 
     with SessionLocal() as s:
-        s.execute(delete(PurchaseOrderItemSource))
-        s.execute(delete(PurchaseOrderItem))
-        s.execute(delete(PurchaseOrder))
-        s.execute(delete(PurchaseRequisitionItem))
-        s.execute(delete(PurchaseRequisition))
+        wipe_chain(s, with_balances=False)
         s.commit()
 
 

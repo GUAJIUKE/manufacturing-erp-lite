@@ -185,16 +185,31 @@
 
 **验收**：非 APPROVED 的 PR 不可转单（4002）、无供应商/停用供应商被拒（404/5006）、拆单两 PO 后 PR 全转完 CONVERTED、合单两 PR 进一 PO、单 item 多来源合单（5+5==10 成功且两 PR CONVERTED）、来源合计 < / > 订购数量均 5010、超转 4009、并发转单单成功、confirm 单价 0 被拒（5007）、取消回退 converted_quantity + PR 回退 APPROVED、已收货不可取消（5008）、Q2 有 active PO 4008、乐观锁 5012、并发 confirm 单成功、403 矩阵、列表可见范围 → `pytest` 138/138 + 冒烟 23/23 → `fix: enforce PO source quantity strict equality`（Review 修正，独立 commit）
 
-### Phase 9 — 采购入库与库存 ⭐ 核心
+### Phase 9 — 采购入库与库存 ✅ 已完成（2026-09-02）
 
-- 入库单创建（明细级数量校验）
-- 事务内：写流水 → 更余额 → 更 PO 累计收货 → 重算 PO 状态
-- 条件更新（CAS）防并发超收
-- 部分到货 / 完全到货
-- 入库冲销（按 Q6 结果）
-- 库存余额、库存流水查询（支持按单据反查）
+- 四概念严格分离（§二）：**PO** = 采购执行依据（100 ordered）→ **Receipt** = 一次实际收货业务事实（R001=40）→ **Transaction** = 库存变化历史流水（append-only ledger，PURCHASE_IN +40）→ **Balance** = 当前余额快照（quantity 40，缓存放行；真历史 = Transaction）
+- 入库单（§三–§六）：`POST /purchase-receipts` 创建即 `POSTED`（无 DRAFT/编辑/审核），编号 `RCV-YYYYMMDD-XXXX`（SequenceKey `RCV`，复用 numbering_service，唯一/并发安全/允许跳号）；一张 Receipt 仅对应一个 PO + 一个 Warehouse；客户端只传 `po_id/warehouse_id/receipt_date/remark/items(po_item_id+received_quantity)`，`receipt_no/received_by(当前登录用户)/material_id(由 po_item 推导)/unit_cost(快照 PO unit_price)/amount(服务端 ROUND_HALF_UP)/status` 全部服务端确定
+- 校验链（§五.13 条 + §二十八/二十九）：PO 存在且 `CONFIRMED`/`PARTIALLY_RECEIVED`（DRAFT/CANCELLED/RECEIVED → `PO_NOT_RECEIVABLE` 5009）→ Warehouse 存在且 ACTIVE（`MASTER_DATA_DISABLED` 3009）→ Material 存在且 ACTIVE（3009）→ ≥1 明细（`RECEIPT_EMPTY_ITEMS` 6003，schema min_length=1）→ 同请求 po_item 去重（`RECEIPT_DUPLICATE_ITEM` 6004）→ po_item 属于该 PO（`RECEIPT_ITEM_NOT_IN_PO` 6012）→ received_quantity > 0（6008）→ CAS 防超收
+- **并发防超收（§八，核心）**：禁止 SELECT→Python 判断→UPDATE；采用数据库原子条件更新 `UPDATE purchase_order_items SET received_quantity = received_quantity + :qty WHERE id=? AND received_quantity + :qty <= ordered_quantity`，rowcount==0 → 重新锁定读穿透 REPEATABLE READ 快照区分不存在/已并发/余量不足 → `PO_RECEIPT_EXCEEDS_REMAINING`(6002) HTTP 409；测试证明剩余 10、双线程 7 vs 6 恰一成功，最终恒满足 `0 <= received_quantity <= ordered_quantity`
+- PO 状态推导（§九）：不硬编码、不按 Receipt 次数，每次入库/冲销后按全部 items 的 `received_quantity vs ordered_quantity` 重新计算（全 0→CONFIRMED；存在 >0 且至少一个未收满→PARTIALLY_RECEIVED；全部收满→RECEIVED）；冲销后回退同样走推导（RECEIVED→PARTIALLY_RECEIVED→CONFIRMED 测试覆盖）
+- Inventory Transaction（§十/二十三）：append-only，两枚 DB 触发器 `trg_it_no_update/trg_it_no_delete`（SIGNAL 45000）硬禁止 UPDATE/DELETE；`quantity` 带符号（PURCHASE_IN +40 / PURCHASE_IN_REVERSAL −40，CHECK 强制类型与符号一致，SUM(quantity) 即净变化）；每笔保存 `unit_cost/amount` 原始成本 + `source_type=PURCHASE_RECEIPT/source_id=receipt.id/source_item_id`；冲销流水 `reversed_transaction_id` 自引用指向被冲销原流水（双向可追溯）；`txn_no`（TXN 序列）
+- Inventory Balance（§十一/二十四）：`UNIQUE(warehouse_id, material_id)`；`quantity DECIMAL(18,4) >= 0 / total_amount DECIMAL(18,2) >= 0 / average_unit_cost DECIMAL(18,4) >= 0` CHECK；安全库存来自 `inventory_policies` 联查（不落库）：无 policy → safety_stock null + is_below_safety_stock false；`last_transaction_at` 联查最新流水
+- 移动加权平均（§十二/十三/十九/二十，全 Decimal 禁 float）：`in_amount = ROUND(qty × unit_cost, 2)`；`new_total = old_total + in_amount`（2 位权威）；`new_avg = ROUND(new_total / new_qty, 4)`（由 total 反算，非直接平均 unit_cost）；示例 10×10 + 10×20 → qty 20 / total 300.00 / avg 15.0000
+- **Balance 并发（§十四）**：先 `INSERT ... ON DUPLICATE KEY UPDATE id=LAST_INSERT_ID(id)` 确保行存在（MySQL ON DUPLICATE KEY 不受 REPEATABLE READ 快照影响，天然解决两事务并发首次创建的 Duplicate Key 竞争），再 `SELECT ... FOR UPDATE` 锁 `(warehouse_id, material_id)` 行，事务内计算后 UPDATE；禁止 SELECT→Python→UPDATE 裸更新（Lost Update 防护）
+- 锁顺序（§十五）：多 Item Receipt 明细统一按 `po_item_id ASC` 处理；Balance 锁统一按 `(warehouse_id ASC, material_id ASC)` 排序获取；同事务全程固定顺序，降低死锁概率（完成报告中说明）
+- 事务边界（§十六/四十五）：一次入库 = 单事务：校验 → 生成 receipt_no → 建 Header → 建 Items → 逐 item [CAS 增 PO received → 写 Transaction → 锁/更新 Balance]（按稳定顺序）→ 推导 PO status → 写 `PURCHASE_RECEIPT_POST` 审计 → COMMIT；任一步失败 ROLLBACK；测试 monkeypatch 中间抛异常验证 Receipt/PO/Transaction/Balance 无半成功状态
+- 冲销 Reversal（§十七–§二十）：无 PUT/PATCH/DELETE（POSTED Receipt 已动库存，405 由 FastAPI 路由不注册自然返回）；`POST /purchase-receipts/{id}/reverse` 整单冲销（reason 必填/trim 非空/≤1000 → 6007，schema 校验 422）；原子 `UPDATE ... WHERE status=POSTED` 防并发双冲（8 线程恰一成功，第二次 `RECEIPT_ALREADY_REVERSED` 6005 / `RECEIPT_NOT_POSTED` 6006）；回退用**原始 receipt item 的 quantity/amount**（绝不按当前 average_cost 猜历史成本，§十九 设计案例验证 10×30 入库冲销 10×20 原单 → total 由 400 回 300）；`new_qty>0` → avg = (old_total − original_amount)/new_qty；归零 → qty=0/total=0/avg=0；Service 防 new_qty<0 / new_total<0（`INVENTORY_NEGATIVE` 6009 / `INVENTORY_BALANCE_MISMATCH` 6010）；material/warehouse 已停用不阻断冲销（撤销历史错误业务，同 Phase 7 reject 思想）
+- Warehouse/Material 停用联动（§二十八/二十九）：非零库存仓库 disable → `WAREHOUSE_HAS_STOCK`(3010) 拒绝；库存归零后允许停用；停用后禁止新 Receipt（3009）；已 POSTED Receipt 可查询、可冲销
+- 审计（§三十）：`PURCHASE_RECEIPT_POST/PURCHASE_RECEIPT_REVERSE` 已存在（Phase 2 预留，action 未变）；记录 operator/document_type/document_id/document_no/action/timestamp + reverse reason；detail 含 po_no/warehouse/receipt_status/old/new PO status，不塞 items JSON（库存明细变化由 Transaction 承担）
+- 查询 API（§二十四–§二十六）：`GET /inventory/balances`（warehouse/material/code/name/below_safety_stock/分页）、`GET /inventory/transactions`（warehouse/material/type/reference_no/source_type/source_id/occurred_at 区间/分页，`occurred_at DESC, id DESC` 稳定排序）、`GET /purchase-receipts`（receipt_no/po_no/po_id/warehouse/status/receipt_date 区间）、`GET /purchase-receipts/{id}`；Receipt 列表对象级可见性复用 PO 可见性（BUYER 仅自己 PO 链、APPLICANT 自己 PR 链、DEPT_MANAGER 本部门、WAREHOUSE/ADMIN 全量）
+- 权限（§二十七，复用既有矩阵不造同义）：`receipt:view/create/reverse`、`inventory:view`、`inventory_txn:view` Phase 2 已建；WAREHOUSE = create/reverse；ADMIN 全部；BUYER 仅 view 自己相关（不做仓库入库）；APPLICANT/DEPT_MANAGER 仅 view
+- 错误码（§三十一）：6xxx 段 Phase 2 预置 + 新增 `RECEIPT_ITEM_NOT_IN_PO`(6012)；PO 状态不符复用 `PO_NOT_RECEIVABLE`(5009)；无同义重复
+- DB 约束（§三十二）：model + migration 双写一致 —— `receipt_no UNIQUE`、`UNIQUE(warehouse_id, material_id)`、`ri_qty_positive`(received_quantity>0)、`ib_qty_nonneg/ib_amount_nonneg/ib_avg_nonneg`、Transaction signed CHECK；并发超收不依赖 CHECK（CAS 为第一道，CHECK 兜底）
+- 迁移（§三十三）：`2026_09_01_2000-c3f8a1d2b7e9`（receipt_no comment REC→RCV、reverse_reason 500→1000、receipt_item amount 生成列→普通列 18,2、balance total_amount 18,4→18,2、txn amount 18,4→18,2），dev+test 双库 `alembic check` 无 drift，downgrade/upgrade 往返通过
+- 期间修复：`_clean_all` 撞自引用 FK `fk_it_reversed`（先置 NULL 再删）；收货人姓名断言查 init_data 真实姓名"赵敏"；移动平均 total_amount 为 2 位权威 → avg=37.04/3=12.3467（非 12.3456）；触发器 SIGNAL 抛 OperationalError 1644 → `pytest.raises(DatabaseError)` 捕获；DELETE 405 断言不带 body；旧测试清理函数 FK 传染 → 抽公共 `cleanup_helper.wipe_business_data` 并接入三处旧清理
+- 工程结构（§四十四）：api 层零库存直写（数量/余额/PO 状态/Transaction/移动平均全部收进 service）；新增 `purchase_receipt_service.py` / `inventory_service.py`；金额/精度复用 `money.py`（新增 `unit_cost()` 4 位 ROUND_HALF_UP）
 
-**验收**：并发入库不重复增加、超量入库被拒、流水可反查 → `feat: add purchase receipt and inventory transaction`
+**验收**（§三十四–§四十三 逐项）：正常入库校验链 15 项、部分收货 5 项、并发 5 项（超收 CAS / Balance 无 Lost Update / 并发首建单行 / 编号不重复）、余额 9 项（移动平均 10×10+10×20、安全库存 below、非零库存仓禁停用）、流水 8 项（含 append-only 405）、冲销 15 项（原始成本回退 400→300、归零 0/0/0、停用物料仍可冲、并发 reverse 单成功）、PO 状态回退 3 项、事务原子性 3 项（monkeypatch 中途抛异常 → 无半成功）、RBAC 矩阵、全链路集成（PR→审批→PO→收 40→PARTIALLY_RECEIVED→收 60→RECEIVED→冲第二张→PARTIALLY_RECEIVED→冲第一张→CONFIRMED、余额 0、全链 document_no 可追溯）→ `pytest` 187/187（138 旧 + 49 新）+ 冒烟 51/51 → 独立 commit `feat: implement purchase receipt and inventory`
 
 ### Phase 10 — 前端
 

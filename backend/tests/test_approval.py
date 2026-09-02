@@ -24,22 +24,19 @@ from datetime import datetime
 from decimal import Decimal
 
 from fastapi.testclient import TestClient
-from sqlalchemy import delete, select
+from sqlalchemy import select
 
 from app.db.session import SessionLocal
 from app.models import (
     ApprovalRecord,
     DepartmentManager,
     OperationLog,
-    PurchaseOrder,
-    PurchaseOrderItem,
-    PurchaseOrderItemSource,
-    PurchaseRequisition,
     PurchaseRequisitionItem,
     Role,
     User,
 )
 from app.utils.enums import AuditAction, RoleCode
+from cleanup_helper import wipe_chain
 
 
 # ----------------------------------------------------------------------
@@ -57,14 +54,10 @@ def _auth(token: str) -> dict[str, str]:
 
 def _clean_prs() -> None:
     """Wipe PR + items + approval_records (and any leftover PO data: sources
-    FK RESTRICT blocks PR item deletion, Phase 8) before each test."""
+    FK RESTRICT blocks PR item deletion, Phase 8; receipts + ledger rows block
+    PO deletion, Phase 9) before each test."""
     with SessionLocal() as s:
-        s.execute(delete(PurchaseOrderItemSource))
-        s.execute(delete(PurchaseOrderItem))
-        s.execute(delete(PurchaseOrder))
-        s.execute(delete(ApprovalRecord))
-        s.execute(delete(PurchaseRequisitionItem))
-        s.execute(delete(PurchaseRequisition))
+        wipe_chain(s, with_balances=False)
         s.commit()
 
 

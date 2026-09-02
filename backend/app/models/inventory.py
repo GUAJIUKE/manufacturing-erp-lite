@@ -12,7 +12,6 @@ from decimal import Decimal
 
 from sqlalchemy import (
     CheckConstraint,
-    Computed,
     Date,
     Enum as SAEnum,
     ForeignKey,
@@ -46,7 +45,7 @@ class PurchaseReceipt(PKMixin, TimestampMixin, Base):
         Index("ix_receipt_status", "status"),
     )
 
-    receipt_no: Mapped[str] = mapped_column(String(32), nullable=False, comment="REC-20260901-0001")
+    receipt_no: Mapped[str] = mapped_column(String(32), nullable=False, comment="RCV-20260901-0001")
     po_id: Mapped[int] = mapped_column(
         BigInteger(unsigned=True),
         ForeignKey("purchase_orders.id", name="fk_receipt_po", ondelete="RESTRICT"),
@@ -76,7 +75,7 @@ class PurchaseReceipt(PKMixin, TimestampMixin, Base):
         comment="冲销人",
     )
     reversed_at: Mapped[datetime | None] = mapped_column(DATETIME(fsp=3), nullable=True, comment="冲销时间")
-    reverse_reason: Mapped[str | None] = mapped_column(String(500), nullable=True, comment="冲销原因（必填）")
+    reverse_reason: Mapped[str | None] = mapped_column(String(1000), nullable=True, comment="冲销原因（必填）")
     remark: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     items: Mapped[list["PurchaseReceiptItem"]] = relationship(
@@ -125,11 +124,13 @@ class PurchaseReceiptItem(PKMixin, Base):
     unit_price: Mapped[Decimal] = mapped_column(
         Numeric(18, 4), nullable=False, comment="成本单价快照（取自 po_item.unit_price）"
     )
+    # 与 PO 明细 amount 同策略（Phase 8 §一）：生成列改为服务端计算列，
+    # 金额精度统一 2 位 ROUND_HALF_UP（money.line_amount），DB 不做隐式舍入。
     amount: Mapped[Decimal] = mapped_column(
-        Numeric(18, 4),
-        Computed("ROUND(received_quantity * unit_price, 4)", persisted=True),
+        Numeric(18, 2),
         nullable=False,
-        comment="入库金额（生成列）",
+        server_default="0",
+        comment="入库金额（服务端计算：ROUND_HALF_UP(received_quantity × unit_price, 2)，非生成列）",
     )
     remark: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -170,7 +171,7 @@ class InventoryBalance(PKMixin, TimestampMixin, Base):
         Numeric(18, 4), nullable=False, server_default="0", comment="账面数量（>= 0，Q8）"
     )
     total_amount: Mapped[Decimal] = mapped_column(
-        Numeric(18, 4), nullable=False, server_default="0", comment="账面总金额"
+        Numeric(18, 2), nullable=False, server_default="0", comment="账面总金额（权威值，ROUND_HALF_UP 2 位）"
     )
     average_unit_cost: Mapped[Decimal] = mapped_column(
         Numeric(18, 4), nullable=False, server_default="0", comment="移动加权平均单价"
@@ -229,7 +230,7 @@ class InventoryTransaction(PKMixin, Base):
     quantity: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False, comment="带符号：入库正、出库负")
     unit_cost: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False, server_default="0", comment="计价单价")
     amount: Mapped[Decimal] = mapped_column(
-        Numeric(18, 4), nullable=False, server_default="0", comment="计价金额（quantity * unit_cost，带符号）"
+        Numeric(18, 2), nullable=False, server_default="0", comment="计价金额（quantity × unit_cost 带符号，ROUND_HALF_UP 2 位）"
     )
     balance_after: Mapped[Decimal] = mapped_column(
         Numeric(18, 4), nullable=False, comment="流水后余额快照，审计用"
