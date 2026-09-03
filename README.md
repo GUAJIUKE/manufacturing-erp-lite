@@ -2,7 +2,7 @@
 
 **制造企业采购库存协同系统** — 面向小型研发制造企业的轻量级 ERP 系统。
 
-> 当前阶段：**Phase 11 Dashboard 管理驾驶舱已完成**（真实数据库 SQL 聚合，五角色权限隔离，口径文档 [docs/dashboard_metrics.md](docs/dashboard_metrics.md)；后端 220 项测试 ✅ / 前端 vitest 47 项 ✅ / typecheck ✅ / build ✅ / 真实 API smoke 35 项 ✅）。**等待 Review，未进入 Phase 12**。
+> 当前阶段：**Phase 12 自动测试已完成**（15 类场景全映射 + 新增端到端业务故事测试 + 覆盖率门禁 >70% → 实测 91%；后端 pytest 229 项 ✅ / 前端 vitest 47 项 ✅；期间修复 DepartmentOut status 枚举 bug）。**等待 Review，未进入 Phase 13**。
 
 ---
 
@@ -133,7 +133,8 @@ admin 登录 → 系统管理（用户/角色权限分配/部门）
 | 9 | 采购入库 + 库存（Receipt/Transaction/Balance/冲销） | ✅ 完成 |
 | 10 | 前端（Vue 3 + TS + Element Plus，真实 API 全业务链 10.1–10.10） | ✅ 完成 |
 | 11 | Dashboard 管理驾驶舱（KPI/趋势/待办/低库存/权限隔离/SQL 聚合） | ✅ 完成 |
-| 12–14 | 测试、部署、文档 | ⬜ 未开始 |
+| 12 | 自动测试（15 类场景全映射 + 端到端故事测试 + 覆盖率 91% > 70% 门禁） | ✅ 完成 |
+| 13–14 | Docker 部署、文档与作品集 | ⬜ 未开始 |
 
 ## 设计要点
 

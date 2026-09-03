@@ -6,7 +6,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.utils.enums import ActiveStatus, RoleCode
+from app.utils.enums import ActiveStatus, DeptStatus, RoleCode
 
 
 # ----------------------------------------------------------------------
@@ -58,7 +58,7 @@ class DepartmentUpdate(BaseModel):
     dept_name: str | None = Field(default=None, min_length=1, max_length=64)
     parent_id: int | None = None
     sort_order: int | None = None
-    status: ActiveStatus | None = None
+    status: DeptStatus | None = None
     remark: str | None = Field(default=None, max_length=255)
 
 
@@ -70,6 +70,6 @@ class DepartmentOut(BaseModel):
     dept_name: str
     parent_id: int | None = None
     sort_order: int
-    status: ActiveStatus
+    status: DeptStatus
     remark: str | None = None
     created_at: datetime

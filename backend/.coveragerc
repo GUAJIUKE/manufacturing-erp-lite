@@ -1,0 +1,15 @@
+# Phase 12 coverage config — 只统计 app/ 业务包
+# seed_demo.py 是开发/演示运维脚本（经真实 HTTP 重放业务故事，自带 KPI 自检），不计入单元覆盖率。
+[run]
+source = app
+omit =
+    app/db/seed_demo.py
+branch = True
+
+[report]
+show_missing = True
+skip_covered = False
+exclude_lines =
+    pragma: no cover
+    if __name__ == "__main__":
+    raise NotImplementedError

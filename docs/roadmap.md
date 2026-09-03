@@ -21,7 +21,7 @@
 | 9 | 采购入库与库存 | 入库单、库存流水、余额更新、部分到货、冲销 | 8 | 大 | ⬜ |
 | 10 | 前端 | Vue3 骨架、登录、主数据、采购、仓库、系统管理页面 | 3–9 | 大 | ⬜ |
 | 11 | Dashboard | 统计卡片、采购金额趋势、库存排行 | 10 | 小 | ⬜ |
-| 12 | 自动测试 | 13 类测试场景，覆盖率 > 70% | 9 | 中 | ⬜ |
+| 12 | 自动测试 | 13 类测试场景，覆盖率 > 70% | 9 | 中 | ✅ 完成 |
 | 13 | Docker 部署 | 多阶段构建、`docker compose up` 一键启动、部署文档 | 12 | 中 | ⬜ |
 | 14 | 文档与作品集 | README、架构/API/业务流文档、演示脚本、简历描述 | 13 | 小 | ⬜ |
 
@@ -238,29 +238,33 @@ Review 发现 ledger `amount` 仅约束了 `quantity` 符号、`amount` 未纳�
 
 **验收**：数字与数据库一致 → `feat: add dashboard statistics`
 
-### Phase 12 — 自动测试
+### Phase 12 — 自动测试 ✅ 已完成（2026-09-03）
 
-13 类必测场景（见 `requirements.md` §11 对应章节）：
+- **场景 1–15 全量映射**（见下表）：既有各 Phase 测试已逐项覆盖；本轮新增 `tests/test_workflow_e2e.py` 把 1–13、15 号场景串成一条**确定性端到端业务故事**（登录×5 → 物料 → PR → submit → 越权审批 2005 → 审批 → DRAFT PR 转单 4002 → PO → confirm → 越权入库 2005 → 部分收 40 → 超收 6002 → 收满 60 → RECEIVED 再收 5009 → CONVERTED 取消 4002 → 重复 submit 409 → 冲销 60 → 双冲 409 → ledger SUM == balance 对账）；14 号并发场景由 `test_purchase_receipt.py` 的线程化 CAS 测试承担
+- **覆盖率门禁 > 70%**：新增 `.coveragerc`（`source=app`，branch 统计，排除运维脚本 `seed_demo.py`），基线 **87%** → 补齐边角分支后 **91%**（全量 229 项测试全绿）；弱模块提升：supplier 35→88%、warehouse 46→84%、role 55→76%、department 68→86%、inventory_policy 66→86%
+- **覆盖率加固**：`tests/test_masterdata_extra.py`（supplier/warehouse update·disable·enable·404·列表筛选 + policy update·顺序校验）、`tests/test_rbac_extra.py`（role 重复编码 409、非法枚举 422、update 改名还原、assign 缺失权限点 404+回滚、department 父子/自环 409/缺失父 404/状态筛选）
+- **期间发现并修复真实 Bug**：`DepartmentOut.status` 用 `ActiveStatus`（ACTIVE/DISABLED），而部门模型为 `DeptStatus`（ACTIVE/INACTIVE）——停用部门（INACTIVE）后列表/详情接口 500。已将 `DepartmentOut.status` / `DepartmentUpdate.status` 对齐为 `DeptStatus`（纯 Pydantic 层修复，无迁移）
+- **设计不可达分支说明**：`role_code` 在 API（`RoleCode` 闭合枚举）与 DB（原生 ENUM）双层封闭，五角色由 `init_data` 固定 —— `role_service.create_role` 成功分支与 `delete_role` 非系统角色分支**结构上不可达**（角色集合固定，扩展点在权限分配），不刻意造测试覆盖
 
-| # | 场景 | 类型 |
+| # | 场景 | 覆盖位置 |
 |---|---|---|
-| 1 | 登录成功 / 失败 / 密码错误 | 集成 |
-| 2 | 创建物料（含编码生成、唯一冲突） | 集成 |
-| 3 | 创建采购申请 | 集成 |
-| 4 | 提交采购申请（DRAFT → PENDING） | 集成 |
-| 5 | 审批采购申请（通过 / 驳回） | 集成 |
-| 6 | 生成采购订单 | 集成 |
-| 7 | 确认采购订单 | 集成 |
-| 8 | 采购入库（一次性收齐） | 集成 |
-| 9 | 部分入库 | 集成 |
-| 10 | 完全入库（PO → RECEIVED） | 集成 |
-| 11 | 库存变化（余额 + 流水条数 + 金额） | 集成 |
-| 12 | 非法状态转换（PENDING 修改、未审批转 PO 等） | 单元 + 集成 |
-| 13 | 超量入库 | 集成 |
-| 14 | 并发入库幂等 | 集成 |
-| 15 | 权限测试（越权审批、越权入库） | 集成 |
+| 1 | 登录成功 / 失败 / 密码错误 | `test_auth` 11 项 + `test_workflow_e2e::test_e2e_login_all_five_roles` |
+| 2 | 创建物料（编码生成、唯一冲突） | `test_masterdata`（含 8 线程并发编码唯一） |
+| 3 | 创建采购申请 | `test_purchase_requisition`（27 项，编号/快照/金额 HALF_UP） |
+| 4 | 提交采购申请（DRAFT → PENDING） | 同上 + `test_workflow_e2e` 主线 |
+| 5 | 审批采购申请（通过 / 驳回） | `test_approval`（38 项，含并发/越权/ADMIN override） |
+| 6 | 生成采购订单 | `test_purchase_order`（33 项，拆单/合单/来源严格相等） |
+| 7 | 确认采购订单 | 同上（零价拒 5007 / 并发单成功） |
+| 8 | 采购入库（一次性收齐） | `test_purchase_receipt`（29 项）+ `test_workflow_e2e` 主线 |
+| 9 | 部分入库 | `test_partial_receipt_flow` + E2E（40 → PARTIALLY_RECEIVED） |
+| 10 | 完全入库（PO → RECEIVED） | `test_multi_item_po_status_derivation` + E2E |
+| 11 | 库存变化（余额 + 流水条数 + 金额） | `test_inventory`（23 项，ledger SUM 对账 / 移动平均 / 符号矩阵）+ E2E 终局对账 |
+| 12 | 非法状态转换 | `test_invalid_transition_rejected` 等 + E2E（5009/4002/409 组） |
+| 13 | 超量入库 | `test_receipt_over_remaining_rejected` + E2E（余 60 收 70 → 6002） |
+| 14 | 并发入库幂等 | `test_concurrent_receipt_no_over_receive`（8 线程 CAS 恰一成功）等 4 项并发 |
+| 15 | 权限测试（越权审批、越权入库） | `test_approval` 403 矩阵 + `test_rbac_crud` + E2E（BUYER 审批 2005 / APPLICANT 入库 2005） |
 
-**验收**：全部通过，覆盖率 > 70% → `test: add purchase workflow integration tests`
+**验收**：全量 `pytest` 229/229 通过 + 覆盖率 91%（门禁 > 70%）→ `test: add purchase workflow integration tests + coverage gate`
 
 ### Phase 13 — Docker 部署
 
