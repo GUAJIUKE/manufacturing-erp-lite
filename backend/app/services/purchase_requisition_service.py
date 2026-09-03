@@ -344,6 +344,29 @@ def get_pr(db: Session, pr_id: int, *, user: CurrentUser) -> PurchaseRequisition
     return pr
 
 
+def visible_pr_condition(db: Session, user: CurrentUser):
+    """当前用户可见 PR 的 WHERE 条件；``None`` 表示全量可见。
+
+    口径与 :func:`list_prs` 完全一致（Phase 7 §六 查询范围）——Phase 11
+    Dashboard 直接复用本函数做 SQL 聚合，避免另起一套范围规则造成漂移：
+
+    - APPLICANT：只看自己创建的 PR
+    - DEPT_MANAGER：自己创建的 + 自己负责部门（当前有效主管关系）的 PR
+    - ADMIN / BUYER / WAREHOUSE：全量（采购执行 / 仓储角色跨部门）
+    """
+    if user.role_code == RoleCode.APPLICANT.value:
+        return PurchaseRequisition.applicant_id == user.id
+    if user.role_code == RoleCode.DEPT_MANAGER.value:
+        managed_dept_ids = db.execute(
+            select(DepartmentManager.dept_id).where(DepartmentManager.user_id == user.id)
+        ).scalars().all()
+        return or_(
+            PurchaseRequisition.applicant_id == user.id,
+            PurchaseRequisition.department_id.in_(managed_dept_ids),
+        )
+    return None
+
+
 def list_prs(
     db: Session,
     *,
@@ -366,20 +389,10 @@ def list_prs(
     stmt = select(PurchaseRequisition)
     count_stmt = select(func.count()).select_from(PurchaseRequisition)
 
-    if user.role_code == RoleCode.APPLICANT.value:
-        cond = PurchaseRequisition.applicant_id == user.id
-        stmt = stmt.where(cond)
-        count_stmt = count_stmt.where(cond)
-    elif user.role_code == RoleCode.DEPT_MANAGER.value:
-        managed_dept_ids = db.execute(
-            select(DepartmentManager.dept_id).where(DepartmentManager.user_id == user.id)
-        ).scalars().all()
-        cond = or_(
-            PurchaseRequisition.applicant_id == user.id,
-            PurchaseRequisition.department_id.in_(managed_dept_ids),
-        )
-        stmt = stmt.where(cond)
-        count_stmt = count_stmt.where(cond)
+    scope_cond = visible_pr_condition(db, user)
+    if scope_cond is not None:
+        stmt = stmt.where(scope_cond)
+        count_stmt = count_stmt.where(scope_cond)
     if pr_no:
         cond = PurchaseRequisition.pr_no.like(f"%{pr_no}%")
         stmt = stmt.where(cond)

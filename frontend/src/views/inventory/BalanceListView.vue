@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
+import { useRoute } from 'vue-router'
 import { Search, WarningFilled } from '@element-plus/icons-vue'
 import { apiBalances } from '@/api/inventory'
 import type { BalanceRow } from '@/types/models'
@@ -19,6 +20,12 @@ const query = reactive({
   material_name: '',
   below_safety_stock: false,
 })
+
+// 支持驾驶舱下钻：首次进入时按 ?below_safety_stock=true 预置低库存筛选
+const route = useRoute()
+if (route.query.below_safety_stock === 'true') {
+  query.below_safety_stock = true
+}
 
 async function load() {
   loading.value = true

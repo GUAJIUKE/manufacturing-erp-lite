@@ -17,6 +17,23 @@ export interface StatusMeta {
   type: TagType
 }
 
+/**
+ * 全站状态色板（唯一权威源）。StatusTag 与 Dashboard 图表都必须引用它，
+ * 保证「图表颜色 = 列表标签颜色」由构造对齐而非页面各自取色。
+ */
+export const TAG_COLOR: Record<TagType, string> = {
+  success: '#0a7d33',
+  warning: '#b76e00',
+  danger: '#d93026',
+  info: '#8a919f',
+  primary: '#2f6fed',
+}
+
+/** 取 TagType 对应的十六进制色（未知回退中性灰）。 */
+export function tagColor(type: TagType | string): string {
+  return TAG_COLOR[type as TagType] ?? TAG_COLOR.info
+}
+
 // PR
 const PR_STATUS: Record<PrStatus, StatusMeta> = {
   DRAFT: { label: '草稿', type: 'info' },

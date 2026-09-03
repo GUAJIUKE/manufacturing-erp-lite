@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { Search } from '@element-plus/icons-vue'
 import { apiPos } from '@/api/purchaseOrders'
 import { apiSuppliers } from '@/api/suppliers'
@@ -17,6 +17,7 @@ const loading = ref(false)
 const rows = ref<PurchaseOrder[]>([])
 const total = ref(0)
 const suppliers = ref<Supplier[]>([])
+
 const query = reactive({
   page: 1,
   page_size: 20,
@@ -26,6 +27,12 @@ const query = reactive({
   order_date_from: '',
   order_date_to: '',
 })
+
+// 支持驾驶舱下钻：首次进入时按 ?status=... 预置筛选
+const route = useRoute()
+if (route.query.status) {
+  query.status = String(route.query.status) as '' | PoStatus
+}
 
 const STATUS_OPTIONS: { value: PoStatus; label: string }[] = [
   { value: 'DRAFT', label: '草稿' },

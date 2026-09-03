@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.api.v1 import (
     auth,
+    dashboard,
     departments,
     inventory,
     inventory_policies,
@@ -41,6 +42,7 @@ api_router.include_router(purchase_requisitions.router)
 api_router.include_router(purchase_orders.router)
 api_router.include_router(purchase_receipts.router)
 api_router.include_router(inventory.router)
+api_router.include_router(dashboard.router)
 
 
 @api_router.get("/health", tags=["system"], summary="服务健康检查")

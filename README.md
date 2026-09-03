@@ -2,7 +2,7 @@
 
 **制造企业采购库存协同系统** — 面向小型研发制造企业的轻量级 ERP 系统。
 
-> 当前阶段：**Phase 10 前端已完成**（Vue 3 + TS + Element Plus 单页应用，真实 API 全业务链，无 mock；typecheck ✅ / build ✅ / vitest 32 项 ✅ / 真实 API E2E 37 项 ✅ / 后端回归保持全绿）。**等待 Review，未进入 Phase 11**。
+> 当前阶段：**Phase 11 Dashboard 管理驾驶舱已完成**（真实数据库 SQL 聚合，五角色权限隔离，口径文档 [docs/dashboard_metrics.md](docs/dashboard_metrics.md)；后端 220 项测试 ✅ / 前端 vitest 47 项 ✅ / typecheck ✅ / build ✅ / 真实 API smoke 35 项 ✅）。**等待 Review，未进入 Phase 12**。
 
 ---
 
@@ -25,7 +25,7 @@
 | 层 | 技术 |
 |---|---|
 | 后端 | Python 3.12 · FastAPI · SQLAlchemy 2.x · Pydantic v2 · MySQL 8 · Alembic · JWT · Pytest |
-| 前端 | Vue 3 · TypeScript · Vite · Element Plus · Pinia · Vue Router · Axios · Vitest（ECharts 留待 Phase 11 Dashboard） |
+| 前端 | Vue 3 · TypeScript · Vite · Element Plus · Pinia · Vue Router · Axios · ECharts（按需注册） · Vitest |
 | 部署 | Docker · Docker Compose |
 
 ## 目录结构
@@ -46,6 +46,7 @@ docker-compose.yml      容器编排
 | [docs/database-design.md](docs/database-design.md) | 数据库设计：22 张表、字段、约束、索引、枚举、Q1–Q16 落地对照 |
 | [docs/ERD.md](docs/ERD.md) | ER 图：全局 / 采购库存链路 / RBAC，附单据状态机 |
 | [docs/data-integrity-review.md](docs/data-integrity-review.md) | 数据一致性评审：11 维度 75 项检查点 |
+| [docs/dashboard_metrics.md](docs/dashboard_metrics.md) | Dashboard 指标口径：KPI 定义、五角色可见性矩阵、SQL 口径与易错点（Phase 11） |
 | [docs/architecture.md](docs/architecture.md) | 系统架构：分层职责、事务边界、并发控制、编号方案 |
 | docs/business-flow.md | 业务流程图（Phase 10） |
 | docs/api-design.md | 接口设计（Phase 6） |
@@ -59,6 +60,7 @@ docker-compose.yml      容器编排
 cd backend
 ./.venv/Scripts/python.exe -m alembic upgrade head   # 首次：建表（已执行可跳过）
 ./.venv/Scripts/python.exe -m app.db.init_data       # 首次：RBAC + 演示账号（幂等）
+./.venv/Scripts/python.exe -m app.db.seed_demo       # 可选：演示业务故事（幂等，含 KPI 自检，Phase 11）
 ./.venv/Scripts/python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
@@ -82,7 +84,27 @@ npm run dev          # http://localhost:5173（/api 代理到 127.0.0.1:8000）
 | wangwu | demo123 | 采购员 | 由 PR 创建 PO 并确认 |
 | zhaoliu | demo123 | 仓库管理员 | 收货入库 / 冲销 / 库存查询 |
 
-### 4. 完整演示流程（全程浏览器，不碰 Swagger/DB/脚本）
+### 4. Dashboard 演示（Phase 11 管理驾驶舱，可选）
+
+先加载演示数据并启动后端，再打开前端 → 左侧「数据看板」：
+
+```bash
+cd backend
+./.venv/Scripts/python.exe -m app.db.seed_demo   # 幂等：复位业务数据 → 重放业务故事 → KPI 自检
+./smoke_ph11.sh                                   # 真实 API 冒烟：五角色 Dashboard 35 项断言
+```
+
+| 角色 | 登录 | 看板视角 |
+|---|---|---|
+| admin | admin123 | KPI 全景：待审批 PR 2 · 待转采购 2 · 待确认 PO 1 · 待收货 PO 1 · 低库存 2 · 库存金额 ¥1,190.00；PR 趋势 / PO 状态分布 / 待办 / 低库存清单 / 最近动态 |
+| lisi | demo123 | 部门主管视角：本部门 + 被管理部门的 PR 统计 |
+| wangwu | demo123 | 采购员视角：待办聚焦「待确认 PO」（自己创建的 DRAFT）+ 待收货 PO |
+| zhaoliu | demo123 | 仓库视角：低库存预警 + 待收货 PO（收货职责），无 PR 类 KPI |
+| zhangsan | demo123 | 申请人视角：仅自己的 PR 统计；待办区为空（执行类待办按角色收敛） |
+
+点击 KPI 卡片 / 待办项 / 低库存行可下钻到 PR / PO / 库存余额列表（带查询条件）。
+
+### 5. 完整演示流程（全程浏览器，不碰 Swagger/DB/脚本）
 
 ```
 zhangsan 登录 → 新建采购申请(PR) → 提交
@@ -110,7 +132,7 @@ admin 登录 → 系统管理（用户/角色权限分配/部门）
 | 8 | 采购订单（PR→PO 转换 + 确认/取消 + 数量一致性） | ✅ 完成 |
 | 9 | 采购入库 + 库存（Receipt/Transaction/Balance/冲销） | ✅ 完成 |
 | 10 | 前端（Vue 3 + TS + Element Plus，真实 API 全业务链 10.1–10.10） | ✅ 完成 |
-| 11 | Dashboard 与图表（待 Review 通过后） | ⬜ 未开始 |
+| 11 | Dashboard 管理驾驶舱（KPI/趋势/待办/低库存/权限隔离/SQL 聚合） | ✅ 完成 |
 | 12–14 | 测试、部署、文档 | ⬜ 未开始 |
 
 ## 设计要点

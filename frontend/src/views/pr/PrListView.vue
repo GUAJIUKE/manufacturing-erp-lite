@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Search } from '@element-plus/icons-vue'
 import { apiPrs, apiCancelPr, apiSubmitPr, apiRevisePr } from '@/api/purchaseRequisitions'
@@ -31,6 +31,12 @@ const query = reactive({
   apply_date_to: '',
 })
 const departments = ref<Department[]>([])
+
+// 支持驾驶舱下钻：首次进入时按 ?status=... 预置筛选
+const route = useRoute()
+if (route.query.status) {
+  query.status = String(route.query.status) as '' | PrStatus
+}
 
 const STATUS_OPTIONS: { value: PrStatus; label: string }[] = [
   { value: 'DRAFT', label: '草稿' },
