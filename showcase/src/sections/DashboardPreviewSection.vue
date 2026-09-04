@@ -11,7 +11,7 @@ const imageSrc = './screenshots/02-dashboard.png';
       <span class="section-eyebrow">管理驾驶舱</span>
       <h2 class="section-title">Dashboard Preview · 真实 ERP 截图</h2>
       <p class="section-subtitle">
-        截图来自真实 admin 视角（seed_demo 数据；2026-09-04 13:38 拍摄）。下方是 6 个 KPI 的口径解释（hover 提示）：
+        截图来自真实 admin 视角（seed_demo 数据；2026-09-04 13:38 拍摄）。下方是 6 个 KPI 的口径解释（桌面端 hover / 键盘 focus 查看；完整口径见 <a href="https://github.com/GUAJIUKE/erp-lite/blob/main/docs/dashboard_metrics.md" target="_blank" rel="noopener">dashboard_metrics.md</a>）：
       </p>
 
       <!-- KPI grid -->

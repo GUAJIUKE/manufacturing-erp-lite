@@ -28,25 +28,17 @@ const ledgerRows = [
             <li
               v-for="(r, i) in ledgerRows"
               :key="i"
+              class="tl-row"
               :style="{
-                display:'grid',
-                gridTemplateColumns:'92px 70px 110px 1fr 70px',
-                gap:'12px',
-                alignItems:'center',
-                padding:'10px 12px',
-                border:'1px solid var(--c-line)',
                 borderLeft: r.isBalance ? '3px solid var(--c-brand-500)' : (r.type === 'REVERSAL' ? '3px solid var(--c-err)' : '3px solid var(--c-ok)'),
-                background:'var(--c-surface-2)',
-                borderRadius:'var(--r-2)',
-                fontSize:'13px',
                 animation: 'ledger-slide .35s ease ' + (i * 0.15) + 's both',
               }"
             >
-              <span class="tag" :class="r.isBalance ? 'tag-info' : (r.type === 'REVERSAL' ? 'tag-err' : 'tag-ok')">{{ r.type }}</span>
-              <span style="font-variant-numeric:tabular-nums;font-weight:700;" :style="{ color: r.type === 'REVERSAL' ? 'var(--c-err-2)' : 'var(--c-ok-2)' }">{{ r.qty }}</span>
-              <span style="font-variant-numeric:tabular-nums;">{{ r.amount }}</span>
-              <span class="muted">{{ r.reason }}</span>
-              <span class="muted" style="text-align:right;">{{ r.ts }}</span>
+              <span class="tag tl-type" :class="r.isBalance ? 'tag-info' : (r.type === 'REVERSAL' ? 'tag-err' : 'tag-ok')">{{ r.type }}</span>
+              <span class="tl-qty" :style="{ color: r.type === 'REVERSAL' ? 'var(--c-err-2)' : 'var(--c-ok-2)' }">{{ r.qty }}</span>
+              <span class="tl-amt">{{ r.amount }}</span>
+              <span class="tl-rsn">{{ r.reason }}</span>
+              <span class="tl-ts">{{ r.ts }}</span>
             </li>
           </ul>
         </div>
