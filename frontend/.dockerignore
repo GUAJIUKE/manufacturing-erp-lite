@@ -1,0 +1,8 @@
+# Build context for frontend image — the image builds fresh from source.
+node_modules
+dist
+.vite
+*.tsbuildinfo
+.env
+.env.local
+.env.*.local

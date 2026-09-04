@@ -1,0 +1,94 @@
+# Manufacturing ERP Lite — Docker deployment (roadmap Phase 13)
+#
+# Usage:
+#   docker compose up -d --build
+#   open http://localhost:8080            (demo login: admin / admin123)
+#   docker compose ps                     (all three services should be healthy)
+#   docker compose logs -f backend        (boot sequence: migrate -> seed -> uvicorn)
+#   docker compose down                   (stop; add -v to drop the MySQL volume)
+#
+# Design notes:
+#   * Only the frontend port is published (8080). MySQL and the backend are
+#     reachable only on the compose-internal network — the host already runs a
+#     native MySQL on 3306 and a dev API on 8000, so no port clash.
+#   * Backend boots via backend/docker-entrypoint.sh: wait-db -> alembic
+#     upgrade head -> init_data (RBAC) -> seed_demo (demo story, DEMO_SEED=1).
+#   * DB credentials default to the app's dev defaults; override via a root
+#     .env file (DB_PASSWORD / DB_NAME / SECRET_KEY) — see docs/deployment.md.
+
+name: erp-lite
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: erp-lite-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:-erp_lite_dev}
+      MYSQL_DATABASE: ${DB_NAME:-erp_lite}
+      # Let the backend container connect as root from the compose network.
+      MYSQL_ROOT_HOST: '%'
+    volumes:
+      - mysql_data:/var/lib/mysql
+    networks:
+      - erp-net
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p\"$$MYSQL_ROOT_PASSWORD\" --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 30s
+
+  backend:
+    build:
+      context: ./backend
+    container_name: erp-lite-backend
+    restart: unless-stopped
+    environment:
+      ENV: dev
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_USER: root
+      DB_PASSWORD: ${DB_PASSWORD:-erp_lite_dev}
+      DB_NAME: ${DB_NAME:-erp_lite}
+      SECRET_KEY: ${SECRET_KEY:-erp-lite-demo-secret-change-me-in-production}
+      DEMO_SEED: ${DEMO_SEED:-1}
+    depends_on:
+      mysql:
+        condition: service_healthy
+    networks:
+      - erp-net
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys;sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health',timeout=3).status==200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      start_period: 90s
+      retries: 12
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        VITE_API_BASE_URL: /api/v1
+    container_name: erp-lite-frontend
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - erp-net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/api/v1/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 12
+
+volumes:
+  mysql_data:
+
+networks:
+  erp-net:

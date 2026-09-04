@@ -1,76 +1,65 @@
-# 截图规划（Screenshots）
+# 真实截图与录屏素材（Phase 13）
 
-> 目标：为 README / 简历 / 面试材料准备一套**真实页面**截图。
->
-> **原则**：只用真实运行中的页面截图；不伪造、不用 mock 页面、不 P 图。
-> 本文件是人工拍摄清单——自动浏览器不可用时，按此清单在本地手动截图即可。
+> 本目录下的 `01-login.png` … `10-rbac.png` 是 **真实 ERP 截图**。
+> 录屏素材（`.webm`）未自动生成 —— 详见 [`recording_plan.md`](./recording_plan.md)。
+> 概念动画（Quantity Chain、Ledger Story）严格不归本目录，由
+> [Showcase 网站](../showcase/) 内 `<Concept animation based on actual ERP rules>` 标签渲染。
 
----
+## 1. 真实性三分类（面试官必读）
 
-## 0. 拍摄前置准备
+| 类型 | 来源 | 位置 |
+|---|---|---|
+| **Real ERP Screenshot** | Playwright + Microsoft Edge 驱动本地 `backend:8000` + `frontend:5173`（基于 seed_demo 数据） | 本目录 + `showcase/public/screenshots/`（同一份 PNG） |
+| **Recorded Demo** | 自动录屏工具不可用（见 [`recording_plan.md`](./recording_plan.md)），以**人工录屏步骤**形式记录 | 待人工录制 |
+| **Concept / Architecture Animation** | 由 Showcase 网站生成：IntersectionObserver + CSS transition，**不连接任何后端** | `showcase/dist/assets/index-*.js` |
+
+三者在 UI 上均有显著标签 —— 真实截图带 `真实截图` tag、概念动画带 `Concept animation based on actual ERP rules` 黄色虚线 banner，避免混淆。
+
+## 2. 截图清单（10 张 · 1920×1080）
+
+| 文件 | 页面 | 账号 | 状态/口径 | 关键看点 |
+|---|---|---|---|---|
+| `01-login.png` | `/login` | — | — | 演示账号表 + Element Plus 登录页 |
+| `02-dashboard.png` | `/dashboard` | admin | 6 KPI：待审 2 / 待转 2 / 待确认 1 / 待收货 1 / 低库存 2 / 库存金额 ¥1,190.00 | ECharts 趋势 + PO 状态环图 + 低库存表 |
+| `03-pr-list.png` | `/purchase-requisitions` | admin | 全部 PR（CONVERTED/CANCELLED/APPROVED/PENDING） | 状态 tag 颜色 + 申请编号 |
+| `04-pr-detail.png` | `/purchase-requisitions/57` | admin | APPROVED PR | 行项目 + 版本 + 操作历史 |
+| `05-approval.png` | `/approvals` | lisi | 部门主管审批列表 | DEPT_MANAGER 范围裁剪（只看本部门 PR） |
+| `06-po-detail.png` | `/purchase-orders/30` | admin | PARTIALLY_RECEIVED | recompute_po_status 推导逻辑体现 |
+| `07-receipt.png` | `/purchase-receipts` | zhaoliu | 仓库收货列表 | 5 张 POSTED 入库单 |
+| `08-inventory-balance.png` | `/inventory` | zhaoliu | 4 条 balance · 2 行低于安全库存 | 高亮 + 安全库存标签 |
+| `09-inventory-transactions.png` | `/inventory/transactions` | zhaoliu | append-only ledger | PURCHASE_IN/REVERSAL + balance_after |
+| `10-rbac.png` | `/users` | admin | 用户/角色管理 | 角色矩阵 + 启停用户 |
+
+> 每张图均来自 seed_demo 业务故事（详见 `backend/seed_demo.py`），与
+> `tests/test_dashboard.py` 同一口径；确定性结果：库存账面金额 ¥1,190.00。
+
+## 3. 截图如何复现
 
 ```bash
-# 后端（终端 1）
-cd backend
-./.venv/Scripts/python.exe -m alembic upgrade head
-./.venv/Scripts/python.exe -m app.db.init_data
-./.venv/Scripts/python.exe -m app.db.seed_demo     # 确定性业务故事 + KPI 自检
-./.venv/Scripts/python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000
-
-# 前端（终端 2）
-cd frontend
-npm run dev                                        # http://localhost:5173
+# 前置：本地 backend:8000 + frontend:5173 已起
+cd <repo-root>
+cd showcase/scripts
+node capture-screenshots.mjs
+# 产物：
+#   docs/screenshots/01..10.png          (master，文档用)
+#   showcase/public/screenshots/01..10.png (build 内嵌，showcase 用)
 ```
 
-浏览器建议：Chrome/Edge，窗口 1440×900+，系统缩放 100%，登录页点演示账号卡片填充。
+实现细节：
+- `playwright-core` 通过 `executablePath` 连接本机 `Microsoft Edge`（无需下载浏览器）
+- viewport `1920×1080`，`deviceScaleFactor: 1`
+- 登录走真实 UI（点击 `登录` 按钮），非 token 注入
+- 切换账号：`localStorage.clear()` + 重新登录
+- 等待 `networkidle` + 900ms（图表动画稳定）
 
-## 1. 截图清单（10 张）
+## 4. 录屏（webm / mp4）
 
-| # | 文件名 | 页面 | 登录账号 | 拍摄要点 |
-|---|---|---|---|---|
-| 01 | `01-login.png` | 登录页 | — | 演示账号卡片 + 品牌感；干净无报错 |
-| 02 | `02-dashboard.png` | 数据看板 | admin | KPI 六卡齐全：待审批 2 / 待转 2 / 待确认 1 / 待收货 1 / 低库存 2 / ¥1,190.00；下方趋势与分布图 |
-| 03 | `03-pr-list.png` | 采购申请列表 | zhangsan | 列表带状态标签（DRAFT/PENDING/APPROVED…）、分页、筛选条 |
-| 04 | `04-pr-detail.png` | PR 详情 | zhangsan | 单头（编号/申请人/部门/金额）+ 明细行 + 状态流转/审批记录区 |
-| 05 | `05-approval.png` | 审批中心 | lisi | 待审批列表；打开一条 PENDING PR 展示「通过 / 驳回」按钮与意见框 |
-| 06 | `06-po-detail.png` | 采购订单详情 | wangwu | 来源映射（sources 展示 PR 来源）、确认按钮、金额汇总；建议抓 CONFIRMED 或 PARTIALLY_RECEIVED 态 |
-| 07 | `07-receipt.png` | 采购入库 | zhaoliu | 新建入库（选 PO + 仓库 + 数量）；或入库单详情（POSTED + 明细 + 冲销按钮） |
-| 08 | `08-inventory-balance.png` | 当前库存 | zhaoliu | 余额表 + 低库存红标/「低于安全库存」标记 + 平均成本列 |
-| 09 | `09-inventory-transactions.png` | 库存流水 | zhaoliu | 带符号数量（+40 / +60 / -60）、类型列（PURCHASE_IN / PURCHASE_IN_REVERSAL）、来源单号 |
-| 10 | `10-system-rbac.png` | 系统管理 | admin | 用户列表（五角色 demo 账号）或 角色权限分配页（勾选权限点矩阵） |
+自动录屏工具**不可用**（headless 浏览器不直接支持录屏，桌面录屏需额外软件且与沙箱冲突），
+故不伪造。请按 [`recording_plan.md`](./recording_plan.md) 的人工步骤录制 3 段短视频。
 
-## 2. 每张截图想传达什么（讲解角度）
+## 5. 不允许的做法
 
-| 截图 | 面试/README 讲什么 |
-|---|---|
-| 01 login | 界面完整（Vue3 + Element Plus），演示账号设计 |
-| 02 dashboard | 角色隔离 KPI + 口径一致性（admin 全景） |
-| 03/04 PR | 单据 + 状态机 + 乐观锁版本号可见 |
-| 05 approval | 审批流 + 部门主管对象级权限 |
-| 06 PO | PR→PO 数量链、来源可追溯 |
-| 07 receipt | 分批收货 + 事务过账 + 冲销 |
-| 08 balance | 移动加权平均成本、低库存口径 |
-| 09 transactions | append-only 流水 + 反向冲销记录（审计链） |
-| 10 rbac | 权限点管理、五角色体系 |
-
-## 3. 可选进阶素材
-
-- **状态标签放大图**：StatusTag 组件五种色（PR/PO/Receipt 各状态）可拼一张小图
-  放进 architecture 或 business_flow 文档。
-- **ER / 架构图**：docs/ERD.md 与 docs/architecture.md 的 mermaid 图渲染成 PNG。
-- **演示录屏**：按 docs/demo_script.md 的 10 步录 3–5 分钟屏（建议 OBS/系统录屏），
-  比静态截图更适合作品集链接。
-
-## 4. 存放位置与命名
-
-```
-docs/screenshots/
-├── README.md          ← 本文件（清单 + 拍摄指引）
-├── 01-login.png
-├── 02-dashboard.png
-├── ...
-└── 10-system-rbac.png
-```
-
-> 截图产出后：README「项目文档」区补一节截图画廊，并在 docs/demo_script.md
-> 每步标注对应截图文件名，方便面试讲述时对照。
+- ❌ 用 Figma / 截图工具伪造 ERP 界面后标注为"真实截图"
+- ❌ 把 Showcase 动画截图后再标注为"真实 ERP 录屏"
+- ❌ 拼接多个真实页面到一张图（除非明确标注是合成示意）
+- ✅ 真实截图必须 1920×1080、统一 viewport、基于演示账号、不出现 devtools / 隐私

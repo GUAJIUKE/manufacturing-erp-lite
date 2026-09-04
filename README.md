@@ -6,6 +6,21 @@
 
 ---
 
+## 🌐 Portfolio Showcase · 推荐入口
+
+> **无需登录 · 无需启动后端 · 30 秒看完业务闭环，2 分钟看完架构，5 分钟看完 5 个工程挑战。**
+> 独立 Vue 3 + TS + Vite 静态站，所有概念动画基于真实业务规则（明确标注）。
+
+| 链接 | 用途 |
+|---|---|
+| 🟢 **本地访问**：http://localhost:8080/showcase/ | docker compose up 后由同一 Nginx 提供（`/` ERP，`/showcase/` Portfolio） |
+| 🟢 **独立构建**：`cd showcase && npm install && npm run build && npm run preview` | http://localhost:5174 |
+| 🟢 **README 内精选截图**：[Dashboard](docs/screenshots/02-dashboard.png) · [业务闭环流程图](#业务闭环) | 真实 ERP 1920×1080 渲染 |
+
+> Showcase 内严格区分三类素材：**Real ERP Screenshot**（`docs/screenshots/`） / **Recorded Demo**（待人工录制，方案见 [`docs/recording_plan.md`](docs/recording_plan.md)） / **Concept Animation**（IntersectionObserver + CSS transition，无后端）。
+
+---
+
 ## 30 秒速览
 
 | 问题 | 回答 |
@@ -15,7 +30,7 @@
 | **技术栈？** | 后端 FastAPI + SQLAlchemy 2 + MySQL 8 + Alembic + Pydantic v2 + JWT；前端 Vue 3 + TypeScript + Element Plus + Pinia + ECharts；Pytest / Vitest 测试 |
 | **业务闭环？** | PR → Approval → PO → Receipt → Inventory（支持部分到货、冲销、拆单与合单） |
 | **技术亮点？** | 单据状态机、RBAC + 对象级权限、乐观锁（Optimistic Locking）+ CAS、事务化库存过账、append-only 库存流水、移动加权平均成本、角色隔离 Dashboard |
-| **如何运行？** | 见下方「快速开始」：本地 MySQL + `alembic upgrade head` + `init_data`，前端 `npm run dev` |
+| **如何运行？** | 两条路任选：① 本地 `alembic upgrade head` + `init_data` + `uvicorn` + `npm run dev`；② 一键 `docker compose up -d --build` → http://localhost:8080（含 /showcase Portfolio） |
 
 ---
 
@@ -30,6 +45,17 @@
                                                                      │
                                                     库存余额 Inventory Balance
 ```
+
+### 真实 ERP 截图（精选 3 张，全部基于 seed_demo 数据）
+
+|  |  |
+|---|---|
+| ![dashboard](docs/screenshots/02-dashboard.png) | ![po-detail](docs/screenshots/06-po-detail.png) |
+| **管理驾驶舱**（admin · 6 KPI + ECharts） | **PO 详情**（PARTIALLY_RECEIVED 状态由 `recompute_po_status` 推导） |
+| ![inventory](docs/screenshots/08-inventory-balance.png) | |
+| **库存余额**（zhaoliu · 低库存高亮 + 加权平均成本列） | |
+
+完整 10 张画廊见 [`docs/screenshots/README.md`](docs/screenshots/README.md) 与 Showcase 网站 `/showcase/#gallery`。
 
 - 采购 100 件 → 到货 40（PO 状态 `PARTIALLY_RECEIVED`）→ 到货 60（`RECEIVED`）——**超量入库被数据库条件更新拒绝**。
 - 支持**拆单**（一张 PR 转多张 PO）与**合单**（多张 PR 合并一张 PO），明细级来源映射全程可追溯。
@@ -151,6 +177,9 @@ admin 登录    → 系统管理（用户 / 角色权限分配 / 部门）
 | 前端 TypeScript / 构建 | ✅ `vue-tsc` + `vite build` 通过 |
 | 真实 API 冒烟（五角色 Dashboard，Phase 11） | ✅ `smoke_ph11.sh` 35 项断言通过 |
 | 迁移一致性 | ✅ `alembic check` 无未生成迁移 |
+| **Showcase 构建** | ✅ `cd showcase && npm run typecheck && npm run build`（43 modules · 104KB JS / 16KB CSS · gzip 43KB） |
+| **Docker Compose 静态校验** | ✅ `docker compose config` 通过（三服务配置正确，daemon 不可用 → 静态 PASSED） |
+| **Docker Compose 实机验收** | ⏸️ **RUNTIME BLOCKED BY ENVIRONMENT**：本机 `wsl.exe` 被安全中心 → 命令安全 → 程序黑名单拦截，Docker Desktop WSL2 引擎无法启动（**不绕过安全策略**）。详见 [docs/deployment.md §2](docs/deployment.md) |
 
 ## 项目文档
 
@@ -167,13 +196,14 @@ admin 登录    → 系统管理（用户 / 角色权限分配 / 部门）
 | [docs/demo_script.md](docs/demo_script.md) | 5–7 分钟面试演示脚本（逐步操作 + 讲解点） |
 | [docs/interview_qa.md](docs/interview_qa.md) | 项目追问 20+ 问（回答严格基于真实实现） |
 | [docs/resume_project.md](docs/resume_project.md) | 简历 / 招聘平台 / 一分钟介绍 三种项目描述 |
-| [docs/screenshots/README.md](docs/screenshots/README.md) | 截图清单（10 张，人工拍摄规划） |
+| [docs/screenshots/README.md](docs/screenshots/README.md) | 截图清单（10 张真实 ERP · 1920×1080 · 三分类标注） |
+| [docs/recording_plan.md](docs/recording_plan.md) | 录屏计划：3 段 webm 人工录制步骤（自动录屏不可用，不伪造） |
 | [docs/database-design.md](docs/database-design.md) | 数据库设计：22 张表、约束、索引、枚举 |
 | [docs/ERD.md](docs/ERD.md) | ER 图：全局 / 采购库存链路 / RBAC + 状态机附录 |
 | [docs/requirements.md](docs/requirements.md) | 需求规格：模块划分、业务流程、规则 R1–R15 |
 | [docs/roadmap.md](docs/roadmap.md) | 开发路线图：Phase 0–14 验收记录与决策落地 |
 | [docs/data-integrity-review.md](docs/data-integrity-review.md) | 数据一致性评审：11 维度 75 项检查点 |
-| [docs/deployment.md](docs/deployment.md) | 部署：Docker Compose 编排（文件就绪，实机验收待环境解除） |
+| [docs/deployment.md](docs/deployment.md) | 部署：Compose 三服务 + Showcase 由同一 Nginx `/showcase/` 提供；环境阻塞说明 |
 
 ## 开发进度
 
@@ -192,7 +222,7 @@ admin 登录    → 系统管理（用户 / 角色权限分配 / 部门）
 | 11 | Dashboard 管理驾驶舱（KPI / 趋势 / 权限隔离 / 口径） | ✅ 完成 |
 | 12 | 自动化测试（15 类场景 + E2E 故事 + 覆盖率 91%） | ✅ 完成 |
 | 12+ | 文档与作品集（架构 / 业务流 / 并发 / 面试材料，当前阶段） | ✅ 完成 |
-| 13 | Docker 部署（编排文件交付，实机验收待引擎可用） | ⏸️ 暂停 |
+| 13 | Docker 部署 + Portfolio Showcase 站（编排 + 真实截图 + 业务链互动 + 测试证据；实机受 wsl.exe 黑名单阻塞 → STATIC PASSED / RUNTIME BLOCKED） | ✅ 完成（静态）/ ⏸️ 实机待环境 |
 
 ## 设计决策摘录
 

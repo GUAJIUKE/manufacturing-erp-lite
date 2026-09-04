@@ -1,0 +1,22 @@
+{
+  "name": "erp-showcase",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Manufacturing ERP Lite — independent Portfolio Showcase site (Vue 3 + TS + Vite, no backend dependency).",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc -b --noEmit && vite build",
+    "preview": "vite preview --port 5174",
+    "typecheck": "vue-tsc -b --noEmit"
+  },
+  "dependencies": {
+    "vue": "^3.5.13"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.2.3",
+    "typescript": "~5.8.2",
+    "vite": "^6.3.3",
+    "vue-tsc": "^2.2.8"
+  }
+}

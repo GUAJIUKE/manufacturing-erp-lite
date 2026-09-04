@@ -1,0 +1,8 @@
+# Build context for backend image — keep the image lean.
+.venv
+__pycache__
+*.pyc
+.pytest_cache
+.coverage
+htmlcov
+smoke_*.sh

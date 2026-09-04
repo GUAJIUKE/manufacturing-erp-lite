@@ -36,6 +36,11 @@ frontend/.vite/
 .vite/
 *.tsbuildinfo
 
+# Showcase (Portfolio Showcase site — independent Vue 3 + TS + Vite)
+showcase/node_modules/
+showcase/dist/
+showcase/.vite/
+
 # IDE
 .idea/
 .vscode/
