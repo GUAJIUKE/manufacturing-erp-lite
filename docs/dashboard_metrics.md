@@ -1,5 +1,9 @@
-# Dashboard 数据口径文档（Phase 11）
+# Dashboard 数据口径文档（Phase 11 / Phase 12 复核）
 
+> Phase 12（2026-09）复核：与 `backend/app/services/dashboard_service.py` 逐项
+> 核对一致（pending_purchase ≠ APPROVED 简单计数、低库存 strict < 且无策略不算、
+> 待收/待转不跨单位 SUM、待办按执行角色收敛），口径无变化。
+>
 > 本文档是管理驾驶舱**唯一权威口径说明**。所有 KPI 的定义、权限范围、空值语义
 > 都以本文件 + `backend/app/services/dashboard_service.py` 为准；前端只做展示
 > 格式化（`formatMoney` / `formatQuantity`），**绝不自行聚合/求和**。
