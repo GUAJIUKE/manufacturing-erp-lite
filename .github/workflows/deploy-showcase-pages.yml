@@ -1,5 +1,6 @@
 # Deploy Portfolio Showcase (showcase/) to GitHub Pages
 # 任意人可通过 https://guajiuke.github.io/manufacturing-erp-lite/ 访问
+# Triggered by push to showcase/** or this workflow file (or manual dispatch).
 name: Deploy Showcase to GitHub Pages
 
 on:
