@@ -21,6 +21,7 @@ from app.api.v1 import (
     purchase_receipts,
     purchase_requisitions,
     roles,
+    stock_reconciliations,
     suppliers,
     users,
     warehouses,
@@ -42,6 +43,7 @@ api_router.include_router(purchase_requisitions.router)
 api_router.include_router(purchase_orders.router)
 api_router.include_router(purchase_receipts.router)
 api_router.include_router(inventory.router)
+api_router.include_router(stock_reconciliations.router)
 api_router.include_router(dashboard.router)
 
 

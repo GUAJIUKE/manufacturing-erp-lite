@@ -29,7 +29,7 @@
 | **解决什么问题？** | 需求（PR）从提报、主管审批、采购下单（PO）、仓库分批收货到库存记账的全流程协同，杜绝超量入库、超量转单、越权审批与账实不一致 |
 | **技术栈？** | 后端 FastAPI + SQLAlchemy 2 + MySQL 8 + Alembic + Pydantic v2 + JWT；前端 Vue 3 + TypeScript + Element Plus + Pinia + ECharts；Pytest / Vitest 测试 |
 | **业务闭环？** | PR → Approval → PO → Receipt → Inventory（支持部分到货、冲销、拆单与合单） |
-| **技术亮点？** | 单据状态机、RBAC + 对象级权限、乐观锁（Optimistic Locking）+ CAS、事务化库存过账、append-only 库存流水、移动加权平均成本、角色隔离 Dashboard |
+| **技术亮点？** | 单据状态机、RBAC + 对象级权限、乐观锁（Optimistic Locking）+ CAS、事务化库存过账、append-only 库存流水、移动加权平均成本、**库存盘点（三快照 + Snapshot Guard + SoD）**、角色隔离 Dashboard |
 | **如何运行？** | 两条路任选：① 本地 `alembic upgrade head` + `init_data` + `uvicorn` + `npm run dev`；② 一键 `docker compose up -d --build` → http://localhost:8080（含 /showcase Portfolio） |
 
 ---
@@ -75,6 +75,7 @@
 - **审批中心**：部门主管审批（`department_managers` 独立关联表），申请部门停用即拒绝审批；ADMIN 越权审批在审计中显式记录
 - **采购订单 PO**：仅 APPROVED PR 可转单；来源数量必须严格等于订购数量；确认时强制单价 > 0；未收货才能取消，取消自动回退 PR 已转数量
 - **采购入库 Receipt**：无草稿、创建即过账（POSTED）；整单冲销（REVERSED）按**原始入库金额**回滚；入库事务原子：单头 + 明细 + 流水 + 余额 + PO 状态同生共死
+- **库存盘点 Stock Reconciliation**：DRAFT → 提交 → 审批即过账（无中间 APPROVED 态）；创建行时固化数量/金额/均价三快照，过账前 **Snapshot Guard**（数量与金额双校验）→ stale 即 `7005` 拒绝并整单回滚；盘盈入账单价后端显式必填（DA-002）；SoD 自审禁止 + ADMIN override 留痕；`ADJUST_IN/OUT` 流水 + 审计同事务；详情见 [docs/stock_reconciliation.md](docs/stock_reconciliation.md)
 - **库存**：余额（当前快照）与流水（append-only ledger，MySQL 触发器禁止 UPDATE/DELETE）；`SUM(流水) == 余额` 恒等式可一键对账；移动加权平均成本
 - **系统管理**：用户 / 角色 / 权限点分配 / 部门（树形）
 
@@ -189,6 +190,8 @@ admin 登录    → 系统管理（用户 / 角色权限分配 / 部门）
 | [docs/business_flow.md](docs/business_flow.md) | 业务流：PR→审批→PO→入库→库存 全链与状态机解释 |
 | [docs/quantity_chain.md](docs/quantity_chain.md) | 数量链：requested / converted / ordered / received 字段为何不可合并 |
 | [docs/inventory_design.md](docs/inventory_design.md) | 库存设计：流水 vs 余额、对账恒等式、移动加权平均成本 |
+| [docs/stock_reconciliation.md](docs/stock_reconciliation.md) | 库存盘点（Sprint 1 / Impl. A）：快照守卫、ADJUST_IN/OUT、SoD、事务边界 |
+| [docs/sprint1-inventory-reality-design.md](docs/sprint1-inventory-reality-design.md) | Reality Hardening Sprint 1 设计报告（v2，含 DA-001~007 修订与 Decision Log） |
 | [docs/concurrency.md](docs/concurrency.md) | 并发控制：乐观锁 / CAS / 余额行锁 / 统一锁顺序 |
 | [docs/transaction.md](docs/transaction.md) | 事务：采购入库原子性与回滚案例 |
 | [docs/rbac.md](docs/rbac.md) | 权限：五角色、权限点、对象级权限、单据状态三层模型 |
@@ -223,6 +226,7 @@ admin 登录    → 系统管理（用户 / 角色权限分配 / 部门）
 | 12 | 自动化测试（15 类场景 + E2E 故事 + 覆盖率 91%） | ✅ 完成 |
 | 12+ | 文档与作品集（架构 / 业务流 / 并发 / 面试材料，当前阶段） | ✅ 完成 |
 | 13 | Docker 部署 + Portfolio Showcase 站（编排 + 真实截图 + 业务链互动 + 测试证据；实机受 wsl.exe 黑名单阻塞 → STATIC PASSED / RUNTIME BLOCKED） | ✅ 完成（静态）/ ⏸️ 实机待环境 |
+| S1-A | Reality Hardening Sprint 1 · 库存盘点核（Stock Reconciliation Core：三快照 + Snapshot Guard + ADJUST_IN/OUT + RBAC/SoD + 并发 + 单事务；待 Code Review，未 commit） | ✅ 已实现（待 Review） |
 
 ## 设计决策摘录
 

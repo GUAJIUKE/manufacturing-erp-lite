@@ -129,7 +129,7 @@ def test_role_list_and_detail(client: TestClient, db) -> None:
         RoleCode.WAREHOUSE.value,
     }
     admin_role = next(x for x in roles if x["role_code"] == "ADMIN")
-    assert len(admin_role["permission_ids"]) == 48  # 44 (Phase 4) + 3 inventory_policy:* (Phase 5) + pr:reject (Phase 7)
+    assert len(admin_role["permission_ids"]) == 55  # 48 (历史累计) + 6 reconcile:* + 1 reconcile:self_approve_override (Sprint 1 / Code Review)
 
     r = client.get(f"/api/v1/roles/{admin_role['id']}", headers=headers)
     assert r.status_code == 200

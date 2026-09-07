@@ -18,6 +18,7 @@ Error code ranges
 4xxx  purchase requisition
 5xxx  purchase order
 6xxx  receiving & inventory
+7xxx  stock reconciliation (Sprint 1 / Impl. A)
 ===== =========================================
 """
 
@@ -104,6 +105,20 @@ class ErrorCode(IntEnum):
     INVENTORY_TXN_APPEND_ONLY = 6011
     # Phase 9: 入库明细归属校验
     RECEIPT_ITEM_NOT_IN_PO = 6012  # po_item 不属于指定 PO（§五.10）
+
+    # 7xxx stock reconciliation (Reality Hardening Sprint 1 / Implementation A)
+    # 仅实现 A 实际用到的错误码；Freeze / True Backdate / Diagnostic 相关码不建。
+    RECONCILIATION_NOT_FOUND = 7001
+    RECONCILIATION_INVALID_STATUS = 7002
+    RECONCILIATION_VERSION_CONFLICT = 7003
+    RECONCILIATION_BALANCE_CHANGED = 7005  # Snapshot Guard：item stale（DA-001 / OQ-12）
+    RECONCILIATION_ALREADY_PROCESSED = 7006  # CAS 认领失败（并发重复审批）
+    RECONCILIATION_SELF_APPROVAL = 7007  # SoD：审批人 == 盘点人（未 override）
+    RECONCILIATION_OVERRIDE_REASON_REQUIRED = 7008
+    RECONCILIATION_EMPTY_ITEMS = 7009
+    RECONCILIATION_PHYSICAL_NEGATIVE = 7011
+    RECONCILIATION_ITEM_NOT_FOUND = 7014
+    RECONCILIATION_VALUATION_RATE_REQUIRED = 7017  # 盘盈行缺失/≤0 valuation_rate（DA-002）
 
 
 class AppException(Exception):
@@ -215,3 +230,57 @@ class InventoryTxnAppendOnlyException(AppException):
     code = ErrorCode.INVENTORY_TXN_APPEND_ONLY
     http_status = status.HTTP_409_CONFLICT
     default_message = "库存流水为只追加账本，禁止修改或删除，请通过反向流水冲销"
+
+
+# ----------------------------------------------------------------------
+# Business: stock reconciliation (Reality Hardening Sprint 1)
+# ----------------------------------------------------------------------
+class ReconciliationNotFoundException(AppException):
+    code = ErrorCode.RECONCILIATION_NOT_FOUND
+    http_status = status.HTTP_404_NOT_FOUND
+    default_message = "库存盘点单不存在"
+
+
+class ReconciliationInvalidStatusException(AppException):
+    code = ErrorCode.RECONCILIATION_INVALID_STATUS
+    http_status = status.HTTP_409_CONFLICT
+    default_message = "当前盘点单状态不允许执行该操作"
+
+
+class ReconciliationVersionConflictException(AppException):
+    code = ErrorCode.RECONCILIATION_VERSION_CONFLICT
+    http_status = status.HTTP_409_CONFLICT
+    default_message = "盘点单已被他人修改，请刷新后重试（版本冲突）"
+
+
+class ReconciliationBalanceChangedException(AppException):
+    code = ErrorCode.RECONCILIATION_BALANCE_CHANGED
+    http_status = status.HTTP_409_CONFLICT
+    default_message = (
+        "盘点后该仓该料又发生业务，盘点基准已漂移（stale）；"
+        "请刷新库存、确认实物后新建盘点单"
+    )
+
+
+class ReconciliationAlreadyProcessedException(AppException):
+    code = ErrorCode.RECONCILIATION_ALREADY_PROCESSED
+    http_status = status.HTTP_409_CONFLICT
+    default_message = "盘点单已被其他审批动作处理，请刷新后重试"
+
+
+class ReconciliationSelfApprovalException(AppException):
+    code = ErrorCode.RECONCILIATION_SELF_APPROVAL
+    http_status = status.HTTP_403_FORBIDDEN
+    default_message = "盘点人不能审批自己创建的盘点单（SoD）"
+
+
+class ReconciliationOverrideReasonRequiredException(AppException):
+    code = ErrorCode.RECONCILIATION_OVERRIDE_REASON_REQUIRED
+    http_status = status.HTTP_422_UNPROCESSABLE_CONTENT
+    default_message = "SoD override 必须提供理由（override_reason）"
+
+
+class ReconciliationValuationRateRequiredException(AppException):
+    code = ErrorCode.RECONCILIATION_VALUATION_RATE_REQUIRED
+    http_status = status.HTTP_422_UNPROCESSABLE_CONTENT
+    default_message = "盘盈（ADJUST_IN）行必须提供 valuation_rate 且大于 0（DA-002）"

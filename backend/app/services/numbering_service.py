@@ -62,7 +62,18 @@ def next_sequence_value(db: Session, key: SequenceKey, sequence_date: date | Non
         current_value=func.last_insert_id(NumberSequence.current_value + 1)
     )
     db.execute(stmt)
-    value = db.execute(select(func.last_insert_id())).scalar_one()
+    # 写后回读该行的真实值，而不是依赖 LAST_INSERT_ID()：MySQL 对真正插入
+    # AUTO_INCREMENT 行的语句会把 LAST_INSERT_ID() 覆盖为自增主键（而非
+    # VALUES 分支里 LAST_INSERT_ID(1) 的期望值 1）——"首次取号"因此会拿到
+    # number_sequences 的 id 而非序号。ON DUPLICATE 更新分支下该行唯一索引
+    # 锁（uk_seq）由本语句持有并持续到事务结束，回读与写入天然串行、无竞态。
+    value = db.execute(
+        select(NumberSequence.current_value)
+        .where(
+            NumberSequence.sequence_key == key.value,
+            NumberSequence.sequence_date == sequence_date,
+        )
+    ).scalar_one()
     return int(value)
 
 

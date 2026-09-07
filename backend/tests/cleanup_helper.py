@@ -64,6 +64,8 @@ def wipe_chain(session: Session, *, with_balances: bool = True) -> None:
             session.execute(text(ddl))
 
     for table in (
+        "stock_reconciliation_items",
+        "stock_reconciliations",
         "purchase_receipt_items",
         "purchase_receipts",
         "purchase_order_item_sources",

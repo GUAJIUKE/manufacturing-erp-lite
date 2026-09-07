@@ -7,6 +7,7 @@ import type {
   PoStatus,
   PrStatus,
   ReceiptStatus,
+  ReconciliationStatus,
   RoleCode,
   TxnSourceType,
   TxnType,
@@ -342,6 +343,71 @@ export interface Transaction {
   transaction_at: string
   remark: string | null
   created_at: string
+}
+
+// ---------- Stock Reconciliation (Sprint 1 / Implementation A) ----------
+export interface ReconciliationItem {
+  id: number
+  line_no: number
+  material_id: number
+  material_code: string | null
+  material_name: string | null
+  unit: string | null
+  book_quantity_snapshot: string
+  book_total_amount_snapshot: string
+  book_avg_cost_snapshot: string
+  physical_quantity: string
+  difference_quantity: string
+  valuation_rate: string | null
+  adjustment_amount: string
+  remark: string | null
+}
+
+export interface StockReconciliation {
+  id: number
+  reconciliation_no: string
+  warehouse_id: number
+  warehouse_code: string | null
+  warehouse_name: string | null
+  counted_by: number
+  counted_by_name: string | null
+  counted_on: string
+  status: ReconciliationStatus
+  reason: string | null
+  remark: string | null
+  submitted_at: string | null
+  posted_at: string | null
+  approved_by: number | null
+  approved_by_name: string | null
+  approve_comment: string | null
+  override_self_approval: boolean
+  override_reason: string | null
+  version: number
+  item_count: number
+  created_at: string
+  updated_at: string
+  items?: ReconciliationItem[]
+}
+
+export interface ReconciliationItemLine {
+  material_id: number
+  physical_quantity: string
+  valuation_rate?: string | null
+  remark?: string | null
+}
+
+export interface ReconciliationCreatePayload {
+  warehouse_id: number
+  reason?: string | null
+  remark?: string | null
+  items: ReconciliationItemLine[]
+}
+
+export interface ReconciliationUpdatePayload {
+  version: number
+  reason?: string | null
+  remark?: string | null
+  items: ReconciliationItemLine[]
 }
 
 // ---------- System ----------

@@ -67,6 +67,24 @@ class ReceiptStatus(StrEnum):
 
 
 # ----------------------------------------------------------------------
+# Stock Reconciliation (Reality Hardening Sprint 1 / Implementation A)
+# ----------------------------------------------------------------------
+class ReconciliationStatus(StrEnum):
+    """盘点单状态机（Design v2 §4）。
+
+    A 只实现 DRAFT / PENDING / POSTED / REJECTED 四条迁移（submit / approve / reject）；
+    CANCELLED / REVERSED 为 Design 批准的后续能力保留（撤销 / 冲销 → Implementation B）。
+    """
+
+    DRAFT = "DRAFT"
+    PENDING = "PENDING"
+    POSTED = "POSTED"
+    REJECTED = "REJECTED"
+    CANCELLED = "CANCELLED"
+    REVERSED = "REVERSED"
+
+
+# ----------------------------------------------------------------------
 # Inventory
 # ----------------------------------------------------------------------
 class TxnType(StrEnum):
@@ -104,6 +122,8 @@ class TxnSourceType(StrEnum):
     MANUAL_ADJUST = "MANUAL_ADJUST"
     PRODUCTION_ISSUE = "PRODUCTION_ISSUE"
     PRODUCTION_RECEIPT = "PRODUCTION_RECEIPT"
+    # Implementation A: stock reconciliation (ADJUST_IN / ADJUST_OUT rows).
+    STOCK_RECONCILIATION = "STOCK_RECONCILIATION"
 
 
 # ----------------------------------------------------------------------
@@ -166,6 +186,11 @@ class AuditAction(StrEnum):
     WAREHOUSE_DISABLE = "WAREHOUSE_DISABLE"
     WAREHOUSE_ENABLE = "WAREHOUSE_ENABLE"
     INVENTORY_POLICY_CHANGE = "INVENTORY_POLICY_CHANGE"
+    # Implementation A: stock reconciliation core
+    STOCK_COUNT_CREATE = "STOCK_COUNT_CREATE"
+    STOCK_COUNT_SUBMIT = "STOCK_COUNT_SUBMIT"
+    STOCK_COUNT_APPROVE = "STOCK_COUNT_APPROVE"  # 审批并过账（PENDING -> POSTED）
+    STOCK_COUNT_REJECT = "STOCK_COUNT_REJECT"
 
 
 # ----------------------------------------------------------------------
@@ -179,6 +204,7 @@ class SequenceKey(StrEnum):
     PURCHASE_ORDER = "PO"
     PURCHASE_RECEIPT = "RCV"     # RCV-20260901-0001（Phase 9 §三）
     INVENTORY_TRANSACTION = "TXN"  # TXN-20260901-000001
+    STOCK_RECONCILIATION = "CNT"  # CNT-20260904-0001（Implementation A）
 
 
 #: Keys whose sequence never resets (global counter instead of a daily one).

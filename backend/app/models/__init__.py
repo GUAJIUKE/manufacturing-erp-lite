@@ -24,6 +24,7 @@ from app.models.purchase import (
     PurchaseRequisition,
     PurchaseRequisitionItem,
 )
+from app.models.reconciliation import StockReconciliation, StockReconciliationItem
 from app.models.support import NumberSequence, OperationLog
 from app.models.system import (
     Department,
@@ -54,6 +55,8 @@ __all__ = [
     "PurchaseRequisitionItem",
     "Role",
     "RolePermission",
+    "StockReconciliation",
+    "StockReconciliationItem",
     "Supplier",
     "User",
     "Warehouse",

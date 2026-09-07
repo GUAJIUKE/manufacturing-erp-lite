@@ -21,6 +21,14 @@ export type PoStatus =
 
 export type ReceiptStatus = 'POSTED' | 'REVERSED'
 
+export type ReconciliationStatus =
+  | 'DRAFT'
+  | 'PENDING'
+  | 'POSTED'
+  | 'REJECTED'
+  | 'CANCELLED'
+  | 'REVERSED'
+
 export type TxnType =
   | 'PURCHASE_IN'
   | 'PURCHASE_IN_REVERSAL'
@@ -35,6 +43,7 @@ export type TxnSourceType =
   | 'MANUAL_ADJUST'
   | 'PRODUCTION_ISSUE'
   | 'PRODUCTION_RECEIPT'
+  | 'STOCK_RECONCILIATION'
 
 export type ApprovalAction =
   | 'SUBMIT'

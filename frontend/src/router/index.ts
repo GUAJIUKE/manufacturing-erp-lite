@@ -137,6 +137,30 @@ const routes: RouteRecordRaw[] = [
         component: () => import('@/views/inventory/TransactionListView.vue'),
         meta: { requiresAuth: true, permission: 'inventory_txn:view', title: '库存流水' },
       },
+      {
+        path: 'stock-reconciliations',
+        name: 'reconcile-list',
+        component: () => import('@/views/inventory/ReconciliationListView.vue'),
+        meta: { requiresAuth: true, permission: 'reconcile:view', title: '库存盘点' },
+      },
+      {
+        path: 'stock-reconciliations/create',
+        name: 'reconcile-create',
+        component: () => import('@/views/inventory/ReconciliationFormView.vue'),
+        meta: { requiresAuth: true, permission: 'reconcile:create', title: '新建库存盘点' },
+      },
+      {
+        path: 'stock-reconciliations/:id',
+        name: 'reconcile-detail',
+        component: () => import('@/views/inventory/ReconciliationDetailView.vue'),
+        meta: { requiresAuth: true, permission: 'reconcile:view', title: '库存盘点详情' },
+      },
+      {
+        path: 'stock-reconciliations/:id/edit',
+        name: 'reconcile-edit',
+        component: () => import('@/views/inventory/ReconciliationFormView.vue'),
+        meta: { requiresAuth: true, permission: 'reconcile:update', title: '编辑库存盘点' },
+      },
       // ---- 系统管理 ----
       {
         path: 'users',

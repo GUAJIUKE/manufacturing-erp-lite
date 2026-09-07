@@ -120,6 +120,14 @@ PERMISSIONS: list[tuple[str, str, str]] = [
     ("inventory_policy:view", "查看库存策略", "inventory_policy"),
     ("inventory_policy:create", "新建库存策略", "inventory_policy"),
     ("inventory_policy:update", "编辑库存策略", "inventory_policy"),
+    # 库存盘点（Reality Hardening Sprint 1 / Implementation A）
+    ("reconcile:view", "查看库存盘点", "reconcile"),
+    ("reconcile:create", "新建库存盘点", "reconcile"),
+    ("reconcile:update", "编辑库存盘点草稿", "reconcile"),
+    ("reconcile:submit", "提交库存盘点", "reconcile"),
+    ("reconcile:approve", "审批过账库存盘点", "reconcile"),
+    ("reconcile:reject", "驳回库存盘点", "reconcile"),
+    ("reconcile:self_approve_override", "盘点自审 override（SoD 例外，CR-A-007）", "reconcile"),
     # 首页
     ("dashboard:view", "查看首页", "dashboard"),
 ]
@@ -169,6 +177,7 @@ ROLE_PERMISSIONS: dict[RoleCode, set[str]] = {
         "receipt:view", "receipt:create", "receipt:reverse",
         "inventory:view", "inventory_txn:view",
         "inventory_policy:view",
+        "reconcile:view", "reconcile:create", "reconcile:update", "reconcile:submit",
         "dashboard:view",
     },
 }

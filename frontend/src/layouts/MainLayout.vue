@@ -39,6 +39,7 @@ const MENUS: MenuEntry[] = [
     icon: 'Box',
     children: [
       { path: '/purchase-receipts', title: '采购入库', perms: ['receipt:view'] },
+      { path: '/stock-reconciliations', title: '库存盘点', perms: ['reconcile:view'] },
       { path: '/inventory', title: '当前库存', perms: ['inventory:view'] },
       { path: '/inventory/transactions', title: '库存流水', perms: ['inventory_txn:view'] },
     ],
@@ -64,6 +65,7 @@ const activeMenu = computed(() => {
   if (p.startsWith('/approvals')) return '/approvals'
   if (p.startsWith('/purchase-orders')) return '/purchase-orders'
   if (p.startsWith('/purchase-receipts')) return '/purchase-receipts'
+  if (p.startsWith('/stock-reconciliations')) return '/stock-reconciliations'
   if (p.startsWith('/inventory/transactions')) return '/inventory/transactions'
   if (p.startsWith('/inventory')) return '/inventory'
   if (p.startsWith('/materials')) return '/materials'
